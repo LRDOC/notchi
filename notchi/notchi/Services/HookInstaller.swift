@@ -60,14 +60,20 @@ struct HookInstaller {
         let hookEntry: [[String: Any]] = [["type": "command", "command": command]]
         let withMatcher: [[String: Any]] = [["matcher": "*", "hooks": hookEntry]]
         let withoutMatcher: [[String: Any]] = [["hooks": hookEntry]]
+        let preCompactConfig: [[String: Any]] = [
+            ["matcher": "auto", "hooks": hookEntry],
+            ["matcher": "manual", "hooks": hookEntry]
+        ]
 
         var hooks = json["hooks"] as? [String: Any] ?? [:]
 
         let hookEvents: [(String, [[String: Any]])] = [
+            ("UserPromptSubmit", withoutMatcher),
             ("SessionStart", withoutMatcher),
             ("PreToolUse", withMatcher),
             ("PostToolUse", withMatcher),
             ("PermissionRequest", withMatcher),
+            ("PreCompact", preCompactConfig),
             ("Stop", withoutMatcher),
             ("SubagentStop", withoutMatcher),
             ("SessionEnd", withoutMatcher),

@@ -26,6 +26,12 @@ final class NotchiStateMachine {
         let isDone = event.status == "waiting_for_input"
 
         switch event.event {
+        case "UserPromptSubmit":
+            transition(to: .thinking)
+
+        case "PreCompact":
+            transition(to: .compacting)
+
         case "SessionStart":
             stats.startSession()
             transition(to: .thinking)

@@ -71,6 +71,13 @@ struct WorkingIndicatorView: View {
         state == .happy
     }
 
+    private var statusText: String {
+        switch state {
+        case .compacting: return "Compacting"
+        default: return "Thinking"
+        }
+    }
+
     var body: some View {
         HStack(spacing: 4) {
             if isDone {
@@ -86,7 +93,7 @@ struct WorkingIndicatorView: View {
                     .font(.system(size: 14, weight: .bold))
                     .foregroundColor(TerminalColors.claudeOrange)
                     .frame(width: 14, alignment: .center)
-                Text("Thinking\(dots)")
+                Text("\(statusText)\(dots)")
                     .font(.system(size: 13, weight: .medium).italic())
                     .foregroundColor(TerminalColors.claudeOrange)
             }

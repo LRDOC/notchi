@@ -8,7 +8,16 @@ struct ExpandedPanelView: View {
     let onSettingsTap: () -> Void
 
     private var showIndicator: Bool {
-        state != .idle && state != .sleeping
+        switch state {
+        case .idle, .sleeping, .happy:
+            return false
+        case .thinking, .working, .alert, .compacting:
+            return true
+        }
+    }
+
+    private var hasActivity: Bool {
+        !stats.recentEvents.isEmpty || stats.isProcessing || showIndicator
     }
 
     var body: some View {
@@ -31,12 +40,10 @@ struct ExpandedPanelView: View {
                 .frame(height: geometry.size.height * 0.3)
 
             VStack(alignment: .leading, spacing: 0) {
-                if !stats.recentEvents.isEmpty || stats.isProcessing {
+                if hasActivity {
                     Divider().background(Color.white.opacity(0.08))
                     activitySection
-                }
-
-                if stats.sessionStartTime == nil && stats.recentEvents.isEmpty {
+                } else {
                     Spacer()
                     emptyState
                     Spacer()
@@ -113,7 +120,7 @@ struct ExpandedPanelView: View {
             Text("Waiting for activity")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundColor(TerminalColors.secondaryText)
-            Text("Use a tool in Claude Code to start tracking")
+            Text("Send a message in Claude Code to start tracking")
                 .font(.system(size: 12))
                 .foregroundColor(TerminalColors.dimmedText)
         }

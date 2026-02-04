@@ -20,6 +20,8 @@ except:
 hook_event = input_data.get('hook_event_name', '')
 
 status_map = {
+    'UserPromptSubmit': 'processing',
+    'PreCompact': 'compacting',
     'SessionStart': 'waiting_for_input',
     'SessionEnd': 'ended',
     'PreToolUse': 'running_tool',
@@ -48,7 +50,7 @@ if tool_id:
 
 try:
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.connect('/tmp/notchi.sock')
+    sock.connect('$SOCKET_PATH')
     sock.sendall(json.dumps(output).encode())
     sock.close()
 except:
