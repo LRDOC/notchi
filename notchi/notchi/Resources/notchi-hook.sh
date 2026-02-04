@@ -23,14 +23,17 @@ status_map = {
     'SessionStart': 'waiting_for_input',
     'SessionEnd': 'ended',
     'PreToolUse': 'running_tool',
-    'PostToolUse': 'processing'
+    'PostToolUse': 'processing',
+    'PermissionRequest': 'waiting_for_input',
+    'Stop': 'waiting_for_input',
+    'SubagentStop': 'waiting_for_input'
 }
 
 output = {
     'session_id': input_data.get('session_id', ''),
     'cwd': input_data.get('cwd', ''),
     'event': hook_event,
-    'status': status_map.get(hook_event, 'unknown'),
+    'status': input_data.get('status', status_map.get(hook_event, 'unknown')),
     'pid': None,
     'tty': None
 }

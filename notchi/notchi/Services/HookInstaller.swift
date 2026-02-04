@@ -67,6 +67,9 @@ struct HookInstaller {
             ("SessionStart", withoutMatcher),
             ("PreToolUse", withMatcher),
             ("PostToolUse", withMatcher),
+            ("PermissionRequest", withMatcher),
+            ("Stop", withoutMatcher),
+            ("SubagentStop", withoutMatcher),
             ("SessionEnd", withoutMatcher),
         ]
 

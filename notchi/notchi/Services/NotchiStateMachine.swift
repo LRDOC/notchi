@@ -34,14 +34,24 @@ final class NotchiStateMachine {
             let toolInput = event.toolInput?.mapValues { $0.value }
             stats.recordPreToolUse(tool: event.tool, toolInput: toolInput, toolUseId: event.toolUseId)
             transition(to: .thinking)
+            if isDone {
+                SoundService.shared.playNotificationSound()
+            }
+
+        case "PermissionRequest":
+            transition(to: .thinking)
+            SoundService.shared.playNotificationSound()
 
         case "PostToolUse":
             let success = event.status != "error"
             stats.recordPostToolUse(tool: event.tool, toolUseId: event.toolUseId, success: success)
 
-        case "Stop", "SubagentStop":
+        case "Stop":
             transition(to: .happy)
             SoundService.shared.playNotificationSound()
+
+        case "SubagentStop":
+            transition(to: .happy)
 
         case "SessionEnd":
             stats.endSession()
