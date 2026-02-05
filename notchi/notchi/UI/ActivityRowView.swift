@@ -27,9 +27,9 @@ struct ActivityRowView: View {
     }
 
     private var bullet: some View {
-        Text("•")
-            .font(.system(size: 14, weight: .bold))
-            .foregroundColor(bulletColor)
+        Circle()
+            .fill(bulletColor)
+            .frame(width: 5, height: 5)
     }
 
     private var bulletColor: Color {
@@ -74,7 +74,7 @@ struct WorkingIndicatorView: View {
     private var statusText: String {
         switch state {
         case .compacting: return "Compacting"
-        default: return "Thinking"
+        default: return "Clanking"
         }
     }
 

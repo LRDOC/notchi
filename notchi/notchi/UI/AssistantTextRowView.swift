@@ -15,9 +15,10 @@ struct AssistantTextRowView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Text("•")
-                .font(.system(size: 14, weight: .bold))
-                .foregroundColor(TerminalColors.iMessageBlue)
+            Circle()
+                .fill(TerminalColors.iMessageBlue)
+                .frame(width: 5, height: 5)
+                .padding(.top, 6)
 
             Text(isExpanded ? cleanedText : truncatedText)
                 .font(.system(size: 13))
@@ -27,18 +28,25 @@ struct AssistantTextRowView: View {
 
             Spacer(minLength: 8)
 
-            Image(systemName: "chevron.right")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(TerminalColors.secondaryText)
-                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            if isTruncatable {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(TerminalColors.secondaryText)
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            }
         }
         .padding(.vertical, 4)
         .contentShape(Rectangle())
         .onTapGesture {
+            guard isTruncatable else { return }
             withAnimation(.easeInOut(duration: 0.2)) {
                 isExpanded.toggle()
             }
         }
+    }
+
+    private var isTruncatable: Bool {
+        cleanedText.count > Self.maxDisplayLength
     }
 
     private var cleanedText: String {
