@@ -1,7 +1,12 @@
 enum NotchiTask: String, CaseIterable {
     case idle, working, sleeping, compacting, waiting
 
-    var animationFPS: Double { 4.0 }
+    var animationFPS: Double {
+        switch self {
+        case .compacting: return 6.0
+        default: return 4.0
+        }
+    }
 
     var spritePrefix: String {
         switch self {
@@ -47,9 +52,19 @@ enum NotchiTask: String, CaseIterable {
         }
     }
 
-    var frameCount: Int { 6 }
+    var frameCount: Int {
+        switch self {
+        case .compacting: return 5
+        default: return 6
+        }
+    }
 
-    var columns: Int { 6 }
+    var columns: Int {
+        switch self {
+        case .compacting: return 5
+        default: return 6
+        }
+    }
 }
 
 enum NotchiEmotion: String, CaseIterable {
