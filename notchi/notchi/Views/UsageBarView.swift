@@ -4,6 +4,7 @@ struct UsageBarView: View {
     let usage: QuotaPeriod?
     let isLoading: Bool
     let error: String?
+    var compact: Bool = false
     var onConnect: (() -> Void)?
 
     private var isStale: Bool {
@@ -78,7 +79,7 @@ struct UsageBarView: View {
 
             progressBar
         }
-        .padding(.top, 5)
+        .padding(.top, compact ? 0 : 5)
     }
 
     private var progressBar: some View {

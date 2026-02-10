@@ -205,7 +205,6 @@ struct WorkingIndicatorView: View {
                 .font(.system(size: 13, weight: .medium).italic())
                 .foregroundColor(TerminalColors.claudeOrange)
         }
-        .padding(.vertical, 6)
         .onReceive(dotsTimer) { _ in
             dotCount = (dotCount % 3) + 1
         }

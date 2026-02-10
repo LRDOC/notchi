@@ -136,18 +136,25 @@ struct ExpandedPanelView: View {
                     emptyState
                 }
 
-                Spacer()
+                if !isActivityCollapsed {
+                    Spacer()
+                }
+
+                if showIndicator && !isActivityCollapsed {
+                    WorkingIndicatorView(state: state)
+                }
 
                 UsageBarView(
                     usage: usageService.currentUsage,
                     isLoading: usageService.isLoading,
                     error: usageService.error,
+                    compact: isActivityCollapsed,
                     onConnect: { ClaudeUsageService.shared.connectAndStartPolling() }
                 )
             }
             .padding(.horizontal, 12)
         }
-        .padding(.bottom, 8)
+        .padding(.bottom, 3)
         .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
@@ -221,10 +228,6 @@ struct ExpandedPanelView: View {
                         }
                     }
 
-                    if showIndicator {
-                        WorkingIndicatorView(state: state)
-                            .padding(.top, 4)
-                    }
                 }
                 .transition(.opacity)
             }
