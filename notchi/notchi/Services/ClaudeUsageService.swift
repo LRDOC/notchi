@@ -38,20 +38,16 @@ final class ClaudeUsageService {
     }
 
     func startPolling() {
-        guard AppSettings.isUsageEnabled else {
-            logger.info("Usage not enabled, skipping polling")
-            return
-        }
-
         stopPolling()
 
         Task {
             guard let accessToken = KeychainManager.getAccessTokenSilently() else {
-                logger.info("Silent keychain access unavailable, resetting to disconnected")
+                logger.info("Silent keychain access unavailable")
                 isConnected = false
                 AppSettings.isUsageEnabled = false
                 return
             }
+            AppSettings.isUsageEnabled = true
             await fetchAndStartPolling(with: accessToken)
         }
     }

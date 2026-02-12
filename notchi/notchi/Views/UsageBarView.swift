@@ -5,6 +5,7 @@ struct UsageBarView: View {
     let isLoading: Bool
     let error: String?
     var compact: Bool = false
+    var isEnabled: Bool = AppSettings.isUsageEnabled
     var onConnect: (() -> Void)?
 
     private var isStale: Bool {
@@ -22,7 +23,7 @@ struct UsageBarView: View {
     }
 
     var body: some View {
-        if !AppSettings.isUsageEnabled {
+        if !isEnabled {
             Button(action: { onConnect?() }) {
                 HStack(spacing: 4) {
                     Image(systemName: "lock.shield")
@@ -34,7 +35,6 @@ struct UsageBarView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)
-            .padding(.bottom, -10)
         } else {
             connectedView
         }
