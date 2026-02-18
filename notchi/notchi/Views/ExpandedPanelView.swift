@@ -60,15 +60,21 @@ struct ExpandedPanelView: View {
 
     var body: some View {
         GeometryReader { geometry in
-            if showingSettings {
+            ZStack {
+                if !showingSettings {
+                    if shouldShowSessionPicker {
+                        sessionPickerContent(geometry: geometry)
+                            .transition(.move(edge: .leading).combined(with: .opacity))
+                    } else {
+                        activityContent(geometry: geometry)
+                            .transition(.move(edge: .leading).combined(with: .opacity))
+                    }
+                }
+
                 PanelSettingsView()
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-            } else if shouldShowSessionPicker {
-                sessionPickerContent(geometry: geometry)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-            } else {
-                activityContent(geometry: geometry)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
+                    .frame(width: geometry.size.width)
+                    .offset(x: showingSettings ? 0 : geometry.size.width)
+                    .opacity(showingSettings ? 1 : 0)
             }
         }
         .animation(.easeInOut(duration: 0.25), value: showingSettings)

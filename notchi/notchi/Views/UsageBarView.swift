@@ -59,9 +59,12 @@ struct UsageBarView: View {
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(TerminalColors.secondaryText)
                         if isStale {
-                            Text("(cached)")
-                                .font(.system(size: 10))
-                                .foregroundColor(TerminalColors.dimmedText)
+                            Button(action: { onConnect?() }) {
+                                Text("(tap to reconnect)")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(TerminalColors.dimmedText)
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
                 } else {

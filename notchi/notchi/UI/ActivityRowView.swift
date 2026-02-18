@@ -5,7 +5,7 @@ struct ActivityRowView: View {
     let event: SessionEvent
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 8) {
                 bullet
                 toolName
@@ -20,7 +20,7 @@ struct ActivityRowView: View {
                     .foregroundColor(TerminalColors.dimmedText)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .padding(.leading, 16)
+                    .padding(.leading, 13)
             }
         }
         .padding(.vertical, 4)

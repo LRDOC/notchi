@@ -70,7 +70,7 @@ struct PanelSettingsView: View {
                 SettingsRowView(icon: "gauge.with.dots.needle.33percent", title: "Claude Usage") {
                     statusBadge(
                         usageConnected ? "Connected" : "Not Connected",
-                        color: usageConnected ? TerminalColors.green : TerminalColors.dimmedText
+                        color: usageConnected ? TerminalColors.green : TerminalColors.red
                     )
                 }
             }
@@ -85,12 +85,12 @@ struct PanelSettingsView: View {
             SettingsRowView(icon: "brain", title: "Emotion Analysis") {
                 statusBadge(
                     hasApiKey ? "Active" : "No Key",
-                    color: hasApiKey ? TerminalColors.green : TerminalColors.dimmedText
+                    color: hasApiKey ? TerminalColors.green : TerminalColors.red
                 )
             }
 
             HStack(spacing: 6) {
-                SecureField("Anthropic API Key", text: $apiKeyInput)
+                SecureField("", text: $apiKeyInput)
                     .textFieldStyle(.plain)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundColor(TerminalColors.primaryText)
@@ -99,6 +99,15 @@ struct PanelSettingsView: View {
                     .background(Color.white.opacity(0.06))
                     .cornerRadius(6)
                     .onSubmit { saveApiKey() }
+                    .overlay(alignment: .leading) {
+                        if apiKeyInput.isEmpty {
+                            Text("Anthropic API Key")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(TerminalColors.dimmedText)
+                                .padding(.leading, 8)
+                                .allowsHitTesting(false)
+                        }
+                    }
 
                 Button(action: saveApiKey) {
                     Image(systemName: hasApiKey ? "checkmark.circle.fill" : "arrow.right.circle")

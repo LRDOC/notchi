@@ -5,7 +5,11 @@ struct SessionSpriteView: View {
     let isSelected: Bool
     let onTap: () -> Void
 
-    @State private var bobOffset: CGFloat = 0
+    @State private var isBobUp = false
+
+    private var bobAmplitude: CGFloat {
+        isSelected ? state.bobAmplitude : state.bobAmplitude * 0.67
+    }
 
     var body: some View {
         Button(action: onTap) {
@@ -18,23 +22,21 @@ struct SessionSpriteView: View {
             )
             .frame(width: 30, height: 30)
             .opacity(isSelected ? 1.0 : 0.5)
-            .offset(y: bobOffset)
+            .offset(y: isBobUp ? -bobAmplitude : bobAmplitude)
         }
         .buttonStyle(.plain)
         .onAppear {
-            startBobAnimationIfNeeded()
+            startBobAnimation()
         }
         .onChange(of: state) {
-            bobOffset = 0
-            startBobAnimationIfNeeded()
+            startBobAnimation()
         }
     }
 
-    private func startBobAnimationIfNeeded() {
-        let amplitude = isSelected ? state.bobAmplitude : state.bobAmplitude * 0.67
-        guard amplitude > 0 else { return }
+    private func startBobAnimation() {
+        guard bobAmplitude > 0 else { return }
         withAnimation(.easeInOut(duration: state.bobDuration).repeatForever(autoreverses: true)) {
-            bobOffset = amplitude
+            isBobUp.toggle()
         }
     }
 }

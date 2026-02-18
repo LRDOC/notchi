@@ -235,6 +235,8 @@ struct NotchContentView: View {
             headerSprites
                 .offset(x: 15, y: -2)
                 .frame(width: sideWidth)
+                .opacity(isExpanded ? 0 : 1)
+                .animation(.none, value: isExpanded)
         }
     }
 
