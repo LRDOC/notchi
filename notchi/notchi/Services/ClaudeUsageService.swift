@@ -18,6 +18,7 @@ final class ClaudeUsageService {
     private var pollTimer: Timer?
     private let pollInterval: TimeInterval = 60
     private var cachedToken: String?
+    private var backoffMultiplier: TimeInterval = 1
 
     private init() {}
 
@@ -52,6 +53,17 @@ final class ClaudeUsageService {
         }
     }
 
+    func retryNow() {
+        backoffMultiplier = 1
+        error = nil
+        stopPolling()
+        Task {
+            guard let accessToken = cachedToken else { return }
+            await performFetch(with: accessToken)
+            if isConnected { schedulePollTimer() }
+        }
+    }
+
     func stopPolling() {
         pollTimer?.invalidate()
         pollTimer = nil
@@ -65,12 +77,13 @@ final class ClaudeUsageService {
 
     private func schedulePollTimer() {
         pollTimer?.invalidate()
-        pollTimer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
+        let interval = pollInterval * backoffMultiplier
+        pollTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 await self?.fetchUsage()
             }
         }
-        logger.info("Started usage polling (every \(self.pollInterval)s)")
+        logger.info("Started usage polling (every \(interval)s)")
     }
 
     private func fetchUsage() async {
@@ -105,6 +118,15 @@ final class ClaudeUsageService {
             }
 
             guard httpResponse.statusCode == 200 else {
+                if httpResponse.statusCode == 429 {
+                    let retryInterval = Int(pollInterval * backoffMultiplier)
+                    error = "Rate limited — retrying in \(retryInterval)s"
+                    logger.warning("Rate limited (429), backing off to \(retryInterval)s")
+                    schedulePollTimer()
+                    backoffMultiplier = min(backoffMultiplier * 2, 8)
+                    return
+                }
+
                 if Self.authFailureStatusCodes.contains(httpResponse.statusCode) {
                     cachedToken = nil
                     KeychainManager.clearCachedOAuthToken()
@@ -128,6 +150,12 @@ final class ClaudeUsageService {
 
             let usageResponse = try JSONDecoder().decode(UsageResponse.self, from: data)
             currentUsage = usageResponse.fiveHour
+
+            if backoffMultiplier > 1 {
+                backoffMultiplier = 1
+                schedulePollTimer()
+                logger.info("Backoff reset, polling restored to \(self.pollInterval)s")
+            }
 
             logger.info("Usage fetched: \(self.currentUsage?.usagePercentage ?? 0)%")
 

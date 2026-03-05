@@ -7,6 +7,7 @@ struct UsageBarView: View {
     var compact: Bool = false
     var isEnabled: Bool = AppSettings.isUsageEnabled
     var onConnect: (() -> Void)?
+    var onRetry: (() -> Void)?
 
     private var isStale: Bool {
         error != nil && usage != nil
@@ -51,13 +52,18 @@ struct UsageBarView: View {
     private var connectedView: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                if error != nil, usage == nil {
-                    Button(action: { onConnect?() }) {
-                        Text("Tap to connect usage tracking")
-                            .font(.system(size: 11, weight: .medium))
+                if let error, usage == nil {
+                    Button(action: { onRetry?() }) {
+                        HStack(spacing: 4) {
+                            Text(error)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(TerminalColors.dimmedText)
+                            Text("(tap to retry)")
+                                .font(.system(size: 10))
+                                .foregroundColor(TerminalColors.dimmedText)
+                        }
                     }
                     .buttonStyle(.plain)
-                    .foregroundColor(TerminalColors.dimmedText)
                 } else if let usage, let resetTime = usage.formattedResetTime {
                     HStack(spacing: 4) {
                         Text("Resets in \(resetTime)")
