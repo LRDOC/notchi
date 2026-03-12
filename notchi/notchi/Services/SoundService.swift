@@ -14,7 +14,12 @@ final class SoundService {
 
     private init() {}
 
-    func playNotificationSound(sessionId: String) {
+    func playNotificationSound(sessionId: String, isInteractive: Bool) {
+        guard isInteractive else {
+            logger.debug("Non-interactive session, skipping sound")
+            return
+        }
+
         let sound = AppSettings.notificationSound
         guard let soundName = sound.soundName else {
             logger.debug("Notification sound disabled")
