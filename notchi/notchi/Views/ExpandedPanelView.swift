@@ -50,20 +50,10 @@ struct ExpandedPanelView: View {
     private var unifiedActivityItems: [ActivityItem] {
         guard let session = effectiveSession else { return [] }
 
-        let cutoff = session.promptSubmitTime?.addingTimeInterval(-0.1)
-
         let filteredToolEvents = session.recentEvents
             .filter { $0.type != "UserPromptSubmit" }
-            .filter { event in
-                guard let cutoff else { return true }
-                return event.timestamp >= cutoff
-            }
 
         let filteredMessages = session.recentAssistantMessages
-            .filter { message in
-                guard let cutoff else { return true }
-                return message.timestamp >= cutoff
-            }
 
         let toolItems = filteredToolEvents
             .map { ActivityItem.tool($0) }

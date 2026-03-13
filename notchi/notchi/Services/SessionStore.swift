@@ -131,7 +131,6 @@ final class SessionStore {
             if let prompt {
                 session.recordUserPrompt(prompt)
             }
-            session.clearAssistantMessages()
             session.clearPendingQuestions()
             if Self.isLocalSlashCommand(prompt) {
                 session.updateTask(.idle)

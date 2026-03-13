@@ -38,7 +38,7 @@ final class NotchiStateMachine {
 
         switch normalizedEvent {
         case "UserPromptSubmit":
-            if isClaudeSource || source == .gemini {
+            if isClaudeSource {
                 pendingPositionMarks[event.sessionId] = Task {
                     await ConversationParser.shared.markCurrentPosition(
                         sessionId: event.sessionId,
