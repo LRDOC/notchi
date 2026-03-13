@@ -118,11 +118,37 @@ final class SocketServer {
 
         guard !allData.isEmpty else { return }
 
-        guard let event = try? JSONDecoder().decode(HookEvent.self, from: allData) else {
-            logger.warning("Failed to parse event")
+        if let event = decodeEvent(from: allData) {
+            dispatch(event)
             return
         }
 
+        guard let payload = String(data: allData, encoding: .utf8) else {
+            logger.warning("Failed to parse event (non-UTF8 payload)")
+            return
+        }
+
+        var parsedAny = false
+        for line in payload.split(whereSeparator: \.isNewline) {
+            guard !line.isEmpty,
+                  let event = decodeEvent(from: Data(line.utf8)) else { continue }
+            parsedAny = true
+            dispatch(event)
+        }
+
+        if !parsedAny {
+            let preview = payload
+                .replacingOccurrences(of: "\n", with: " ")
+                .prefix(200)
+            logger.warning("Failed to parse event payload: \(String(preview), privacy: .private)")
+        }
+    }
+
+    private func decodeEvent(from data: Data) -> HookEvent? {
+        try? JSONDecoder().decode(HookEvent.self, from: data)
+    }
+
+    private func dispatch(_ event: HookEvent) {
         logEvent(event)
         eventHandler?(event)
     }

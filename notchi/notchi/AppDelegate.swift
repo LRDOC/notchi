@@ -38,11 +38,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startHookServices() {
-        HookInstaller.installIfNeeded()
         SocketServer.shared.start { event in
             Task { @MainActor in
                 NotchiStateMachine.shared.handleEvent(event)
             }
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            HookInstallerCoordinator.installAll()
         }
     }
 

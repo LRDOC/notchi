@@ -3,22 +3,15 @@ import SwiftUI
 
 struct PanelSettingsView: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
-    @State private var hooksInstalled = HookInstaller.isInstalled()
-    @State private var hooksError = false
+    @State private var installedTools: [AIToolSource] = []
+    @State private var installErrors: [AIToolSource: String] = [:]
+    @State private var toolEnabled: [AIToolSource: Bool] = Dictionary(
+        uniqueKeysWithValues: AIToolSource.allCases.map { ($0, AppSettings.isToolEnabled($0)) }
+    )
     @State private var apiKeyInput = AppSettings.anthropicApiKey ?? ""
     @ObservedObject private var updateManager = UpdateManager.shared
     private var usageConnected: Bool { ClaudeUsageService.shared.isConnected }
     private var hasApiKey: Bool { !apiKeyInput.isEmpty }
-
-    private var hookStatusText: String {
-        if hooksError { return "Error" }
-        if hooksInstalled { return "Installed" }
-        return "Not Installed"
-    }
-
-    private var hookStatusColor: Color {
-        hooksInstalled && !hooksError ? TerminalColors.green : TerminalColors.red
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -41,6 +34,7 @@ struct PanelSettingsView: View {
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear(perform: refreshHookStatus)
     }
 
     private var displaySection: some View {
@@ -60,12 +54,27 @@ struct PanelSettingsView: View {
             }
             .buttonStyle(.plain)
 
-            Button(action: installHooksIfNeeded) {
+            Button(action: installAllHooks) {
                 SettingsRowView(icon: "terminal", title: "Hooks") {
-                    statusBadge(hookStatusText, color: hookStatusColor)
+                    hooksStatusBadge
                 }
             }
             .buttonStyle(.plain)
+
+            ForEach(AIToolSource.allCases, id: \.rawValue) { source in
+                toolToggleRow(source)
+            }
+
+            if !installErrors.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(AIToolSource.allCases.filter { installErrors[$0] != nil }, id: \.rawValue) { source in
+                        Text("\(source.displayName): \(installErrors[source] ?? "")")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(TerminalColors.red)
+                    }
+                }
+                .padding(.leading, 12)
+            }
 
             Button(action: connectUsage) {
                 SettingsRowView(icon: "gauge.with.dots.needle.33percent", title: "Claude Usage") {
@@ -189,14 +198,101 @@ struct PanelSettingsView: View {
         ClaudeUsageService.shared.connectAndStartPolling()
     }
 
-    private func installHooksIfNeeded() {
-        guard !hooksInstalled else { return }
-        hooksError = false
-        let success = HookInstaller.installIfNeeded()
-        if success {
-            hooksInstalled = HookInstaller.isInstalled()
-        } else {
-            hooksError = true
+    private var hooksStatusBadge: some View {
+        Group {
+            if !installErrors.isEmpty {
+                statusBadge("Issues", color: TerminalColors.red)
+            } else if installedTools.isEmpty {
+                statusBadge("Not Installed", color: TerminalColors.red)
+            } else {
+                Text(installedTools.map(\.displayName).joined(separator: ", "))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(TerminalColors.green)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(TerminalColors.green.opacity(0.15))
+                    .cornerRadius(4)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func toolToggleRow(_ source: AIToolSource) -> some View {
+        let isInstalled = installedTools.contains(source)
+        let isOn = toolEnabled[source] ?? true
+        let issue = installErrors[source]
+        let isToolAvailable = HookInstallerCoordinator.installer(for: source)?.isToolAvailable ?? false
+
+        Button(action: {
+            if isInstalled {
+                let newValue = !(toolEnabled[source] ?? true)
+                AppSettings.setToolEnabled(source, newValue)
+                toolEnabled[source] = newValue
+            } else {
+                installTool(source)
+            }
+        }) {
+            SettingsRowView(icon: "circle.fill", title: source.displayName) {
+                if isInstalled {
+                    ToggleSwitch(isOn: isOn)
+                } else if issue != nil {
+                    statusBadge("Unsupported", color: TerminalColors.red)
+                } else if !isToolAvailable {
+                    statusBadge("Not Found", color: TerminalColors.dimmedText)
+                } else {
+                    statusBadge("Install", color: TerminalColors.dimmedText)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .opacity(isInstalled || issue != nil ? 1.0 : 0.6)
+        .padding(.leading, 12)
+    }
+
+    private func installAllHooks() {
+        Task.detached(priority: .userInitiated) {
+            var issues = HookInstallerCoordinator.compatibilityIssues()
+            for source in AIToolSource.allCases {
+                guard let installer = HookInstallerCoordinator.installer(for: source) else { continue }
+                let result = installer.installIfNeeded()
+                if case .failed(let error) = result {
+                    issues[source] = error.localizedDescription
+                }
+            }
+            await MainActor.run { installErrors = issues }
+            await MainActor.run { refreshHookStatus() }
+        }
+    }
+
+    private func installTool(_ source: AIToolSource) {
+        Task.detached(priority: .userInitiated) {
+            guard let installer = HookInstallerCoordinator.installer(for: source) else { return }
+            let result = installer.installIfNeeded()
+            await MainActor.run {
+                if case .failed(let error) = result {
+                    installErrors[source] = error.localizedDescription
+                } else {
+                    installErrors.removeValue(forKey: source)
+                }
+            }
+            await MainActor.run { refreshHookStatus() }
+        }
+    }
+
+    private func refreshHookStatus() {
+        Task.detached(priority: .userInitiated) {
+            let tools = HookInstallerCoordinator.installedTools()
+            let issues = HookInstallerCoordinator.compatibilityIssues()
+            await MainActor.run {
+                installedTools = tools
+                for (source, message) in issues {
+                    installErrors[source] = message
+                }
+                let installed = Set(tools)
+                for source in AIToolSource.allCases where installed.contains(source) {
+                    installErrors.removeValue(forKey: source)
+                }
+            }
         }
     }
 

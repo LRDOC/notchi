@@ -3,18 +3,30 @@ import os.log
 
 private let logger = Logger(subsystem: "com.ruban.notchi", category: "HookInstaller")
 
-struct HookInstaller {
+struct ClaudeHookInstaller: HookInstallerProtocol {
+
+    static let toolName = "Claude Code"
+
+    static var isToolAvailable: Bool {
+        FileManager.default.fileExists(
+            atPath: FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".claude").path
+        )
+    }
 
     @discardableResult
-    static func installIfNeeded() -> Bool {
-        let claudeDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude")
-
-        guard FileManager.default.fileExists(atPath: claudeDir.path) else {
+    static func installIfNeeded() -> HookInstallResult {
+        guard isToolAvailable else {
             logger.warning("Claude Code not installed (~/.claude not found)")
-            return false
+            return .toolNotFound
         }
 
+        guard !isInstalled() else {
+            return .alreadyInstalled
+        }
+
+        let claudeDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude")
         let hooksDir = claudeDir.appendingPathComponent("hooks")
         let hookScript = hooksDir.appendingPathComponent("notchi-hook.sh")
         let settings = claudeDir.appendingPathComponent("settings.json")
@@ -26,7 +38,7 @@ struct HookInstaller {
             )
         } catch {
             logger.error("Failed to create hooks directory: \(error.localizedDescription)")
-            return false
+            return .failed(error)
         }
 
         if let bundled = Bundle.main.url(forResource: "notchi-hook", withExtension: "sh") {
@@ -40,14 +52,20 @@ struct HookInstaller {
                 logger.info("Installed hook script to \(hookScript.path, privacy: .public)")
             } catch {
                 logger.error("Failed to install hook script: \(error.localizedDescription)")
-                return false
+                return .failed(error)
             }
         } else {
+            let err = NSError(domain: "ClaudeHookInstaller", code: -1,
+                              userInfo: [NSLocalizedDescriptionKey: "Hook script not found in bundle"])
             logger.error("Hook script not found in bundle")
-            return false
+            return .failed(err)
         }
 
-        return updateSettings(at: settings)
+        let success = updateSettings(at: settings)
+        return success ? .installed : .failed(NSError(
+            domain: "ClaudeHookInstaller", code: -2,
+            userInfo: [NSLocalizedDescriptionKey: "Failed to update settings.json"]
+        ))
     }
 
     private static func updateSettings(at settingsURL: URL) -> Bool {

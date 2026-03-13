@@ -242,7 +242,7 @@ struct NotchContentView: View {
 
     @ViewBuilder
     private var headerSprites: some View {
-        let topSession = sessionStore.sortedSessions.first
+        let topSession = sessionStore.effectiveSession
         SessionSpriteView(
             state: topSession?.state ?? .idle,
             isSelected: true

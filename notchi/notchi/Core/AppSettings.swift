@@ -5,6 +5,22 @@ struct AppSettings {
     private static let isMutedKey = "isMuted"
     private static let previousSoundKey = "previousNotificationSound"
     private static let isUsageEnabledKey = "isUsageEnabled"
+    private static let disabledToolsKey = "disabledTools"
+
+    static func isToolEnabled(_ source: AIToolSource) -> Bool {
+        let disabled = UserDefaults.standard.stringArray(forKey: disabledToolsKey) ?? []
+        return !disabled.contains(source.rawValue)
+    }
+
+    static func setToolEnabled(_ source: AIToolSource, _ enabled: Bool) {
+        var disabled = UserDefaults.standard.stringArray(forKey: disabledToolsKey) ?? []
+        if enabled {
+            disabled.removeAll { $0 == source.rawValue }
+        } else if !disabled.contains(source.rawValue) {
+            disabled.append(source.rawValue)
+        }
+        UserDefaults.standard.set(disabled, forKey: disabledToolsKey)
+    }
 
     static var isUsageEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: isUsageEnabledKey) }

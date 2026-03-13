@@ -18,17 +18,19 @@ final class SessionData: Identifiable {
     let sessionStartTime: Date
     let spriteXPosition: CGFloat
     let spriteYOffset: CGFloat
+    private(set) var source: AIToolSource
 
     private(set) var task: NotchiTask = .idle
     let emotionState = EmotionState()
     var state: NotchiState {
-        NotchiState(task: task, emotion: emotionState.currentEmotion)
+        NotchiState(task: task, emotion: emotionState.currentEmotion, character: source.character)
     }
     private(set) var isProcessing: Bool = false
     private(set) var lastActivity: Date
     private(set) var recentEvents: [SessionEvent] = []
     private(set) var recentAssistantMessages: [AssistantMessage] = []
     private(set) var lastUserPrompt: String?
+    private(set) var transcriptPath: String?
     private(set) var promptSubmitTime: Date?
     private(set) var permissionMode: String = "default"
     private(set) var pendingQuestions: [PendingQuestion] = []
@@ -70,7 +72,7 @@ final class SessionData: Identifiable {
         if let lastMessage = recentAssistantMessages.last {
             return String(lastMessage.text.prefix(50))
         }
-        return nil
+        return task == .idle ? "Waiting for activity" : task.displayName
     }
 
     // Sprite positioning constants (normalized 0..1 range for X, points for Y)
@@ -83,10 +85,11 @@ final class SessionData: Identifiable {
     private static let yOffsetBase: CGFloat = -5.0
     private static let yOffsetRange: UInt = 51
 
-    init(sessionId: String, cwd: String, sessionNumber: Int, existingXPositions: [CGFloat] = []) {
+    init(sessionId: String, cwd: String, sessionNumber: Int, source: AIToolSource = .claude, existingXPositions: [CGFloat] = []) {
         self.id = sessionId
         self.cwd = cwd
         self.sessionNumber = sessionNumber
+        self.source = source
         self.sessionStartTime = Date()
         self.lastActivity = Date()
 
@@ -132,8 +135,35 @@ final class SessionData: Identifiable {
         logger.debug("Setting promptSubmitTime to: \(now)")
     }
 
+    /// Some providers (e.g. Codex notify) emit prompt events at turn completion.
+    /// Backdate the prompt timestamp to earliest parsed activity so current-turn
+    /// rows are not filtered out in the panel.
+    func backdatePromptSubmitTimeIfNeeded(_ timestamp: Date) {
+        if let current = promptSubmitTime {
+            if timestamp < current {
+                promptSubmitTime = timestamp
+            }
+        } else {
+            promptSubmitTime = timestamp
+        }
+    }
+
     func updatePermissionMode(_ mode: String) {
         permissionMode = mode
+    }
+
+    func updateSource(_ newSource: AIToolSource) {
+        guard source != newSource else { return }
+        source = newSource
+        lastActivity = Date()
+    }
+
+    func updateTranscriptPath(_ path: String) {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard transcriptPath != trimmed else { return }
+        transcriptPath = trimmed
+        lastActivity = Date()
     }
 
     func setPendingQuestions(_ questions: [PendingQuestion]) {
@@ -145,10 +175,16 @@ final class SessionData: Identifiable {
         pendingQuestions = []
     }
 
-    func recordPreToolUse(tool: String?, toolInput: [String: Any]?, toolUseId: String?) {
-        let description = SessionEvent.deriveDescription(tool: tool, toolInput: toolInput)
+    func recordPreToolUse(
+        tool: String?,
+        toolInput: [String: Any]?,
+        toolUseId: String?,
+        description overrideDescription: String? = nil,
+        timestamp: Date = Date()
+    ) {
+        let description = overrideDescription ?? SessionEvent.deriveDescription(tool: tool, toolInput: toolInput)
         let event = SessionEvent(
-            timestamp: Date(),
+            timestamp: timestamp,
             type: "PreToolUse",
             tool: tool,
             status: .running,
@@ -158,16 +194,16 @@ final class SessionData: Identifiable {
         )
         recentEvents.append(event)
         trimEvents()
-        lastActivity = Date()
+        lastActivity = max(lastActivity, timestamp)
     }
 
-    func recordPostToolUse(tool: String?, toolUseId: String?, success: Bool) {
+    func recordPostToolUse(tool: String?, toolUseId: String?, success: Bool, timestamp: Date = Date()) {
         if let toolUseId,
            let index = recentEvents.lastIndex(where: { $0.toolUseId == toolUseId && $0.status == .running }) {
             recentEvents[index].status = success ? .success : .error
         } else {
             let event = SessionEvent(
-                timestamp: Date(),
+                timestamp: timestamp,
                 type: "PostToolUse",
                 tool: tool,
                 status: success ? .success : .error,
@@ -178,7 +214,32 @@ final class SessionData: Identifiable {
             recentEvents.append(event)
             trimEvents()
         }
-        lastActivity = Date()
+        lastActivity = max(lastActivity, timestamp)
+    }
+
+    func recordLifecycleEvent(type: String, description: String?, status: ToolStatus = .running) {
+        let timestamp = Date()
+        if let last = recentEvents.last,
+           last.type == type,
+           last.tool == nil,
+           last.description == description,
+           timestamp.timeIntervalSince(last.timestamp) < 1.0 {
+            lastActivity = timestamp
+            return
+        }
+
+        let event = SessionEvent(
+            timestamp: timestamp,
+            type: type,
+            tool: nil,
+            status: status,
+            toolInput: nil,
+            toolUseId: nil,
+            description: description
+        )
+        recentEvents.append(event)
+        trimEvents()
+        lastActivity = timestamp
     }
 
     func recordAssistantMessages(_ messages: [AssistantMessage]) {

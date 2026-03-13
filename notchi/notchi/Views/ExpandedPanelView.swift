@@ -40,17 +40,34 @@ struct ExpandedPanelView: View {
 
     private var hasActivity: Bool {
         guard let session = effectiveSession else { return false }
-        return !session.recentEvents.isEmpty ||
-               !session.recentAssistantMessages.isEmpty ||
+        return !unifiedActivityItems.isEmpty ||
                session.isProcessing ||
                showIndicator ||
-               session.lastUserPrompt != nil
+               session.lastUserPrompt != nil ||
+               !session.pendingQuestions.isEmpty
     }
 
     private var unifiedActivityItems: [ActivityItem] {
         guard let session = effectiveSession else { return [] }
-        let toolItems = session.recentEvents.map { ActivityItem.tool($0) }
-        let messageItems = session.recentAssistantMessages.map { ActivityItem.assistant($0) }
+
+        let cutoff = session.promptSubmitTime?.addingTimeInterval(-0.1)
+
+        let filteredToolEvents = session.recentEvents
+            .filter { $0.type != "UserPromptSubmit" }
+            .filter { event in
+                guard let cutoff else { return true }
+                return event.timestamp >= cutoff
+            }
+
+        let filteredMessages = session.recentAssistantMessages
+            .filter { message in
+                guard let cutoff else { return true }
+                return message.timestamp >= cutoff
+            }
+
+        let toolItems = filteredToolEvents
+            .map { ActivityItem.tool($0) }
+        let messageItems = filteredMessages.map { ActivityItem.assistant($0) }
         return (toolItems + messageItems).sorted { $0.timestamp < $1.timestamp }
     }
 
@@ -247,11 +264,11 @@ struct ExpandedPanelView: View {
     }
 
     private var emptyState: some View {
-        let hooksInstalled = HookInstaller.isInstalled()
+        let hooksInstalled = HookInstallerCoordinator.isAnyInstalled()
         let title = hooksInstalled ? "Waiting for activity" : "Hooks not installed"
         let subtitle = hooksInstalled
-            ? "Send a message in Claude Code to start tracking"
-            : "Open settings to set up Claude Code integration"
+            ? "Send a message in any connected CLI to start tracking"
+            : "Open settings to install hooks for your CLI"
 
         return VStack(spacing: 8) {
             Text(title)
