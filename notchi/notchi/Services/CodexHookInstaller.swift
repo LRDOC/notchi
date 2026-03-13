@@ -127,6 +127,14 @@ struct CodexHookInstaller: HookInstallerProtocol {
 
     static func compatibilityIssue() -> String? {
         guard isToolAvailable else { return nil }
+
+        // This probe shells out to Codex and must never block UI rendering.
+        // If we are on the main thread and have not probed yet, assume
+        // compatible for now and let background checks populate the cache.
+        if Thread.isMainThread, notifySupportCache == nil {
+            return nil
+        }
+
         guard !supportsNotifyCommand() else { return nil }
         return "Installed Codex CLI does not support command notifications in config.toml. Update Codex CLI to a version that supports `notify = [\"<command>\"]`."
     }
@@ -156,6 +164,11 @@ struct CodexHookInstaller: HookInstallerProtocol {
             return cached
         }
 
+        if Thread.isMainThread {
+            // Avoid blocking the UI thread for a synchronous process probe.
+            return true
+        }
+
         let fileManager = FileManager.default
         guard let tempRoot = try? fileManager.url(
             for: .itemReplacementDirectory,
@@ -181,11 +194,6 @@ struct CodexHookInstaller: HookInstallerProtocol {
             return false
         }
 
-        guard !Thread.isMainThread else {
-            notifySupportCache = false
-            return false
-        }
-
         guard let codexExecutable = codexExecutablePath() else {
             notifySupportCache = false
             return false
@@ -193,7 +201,7 @@ struct CodexHookInstaller: HookInstallerProtocol {
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: codexExecutable)
-        process.arguments = ["features", "list"]
+        process.arguments = ["--help"]
         var environment = ProcessInfo.processInfo.environment
         environment["HOME"] = tempRoot.path
         process.environment = environment
@@ -216,7 +224,9 @@ struct CodexHookInstaller: HookInstallerProtocol {
         let stderrText = String(data: stderrData, encoding: .utf8) ?? ""
         let hasConfigError = stderrText.contains("invalid type") || stderrText.contains("Error loading config")
 
-        let supported = process.terminationStatus == 0 && !hasConfigError
+        // Treat explicit config parse errors as the only hard incompatibility
+        // signal to avoid false negatives from non-config command failures.
+        let supported = !hasConfigError
         notifySupportCache = supported
         return supported
     }

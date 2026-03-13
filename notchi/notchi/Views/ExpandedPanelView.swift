@@ -68,24 +68,27 @@ struct ExpandedPanelView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                if !showingSettings {
-                    if shouldShowSessionPicker {
-                        sessionPickerContent(geometry: geometry)
-                            .transition(.move(edge: .leading).combined(with: .opacity))
-                    } else {
-                        activityContent(geometry: geometry)
-                            .transition(.move(edge: .leading).combined(with: .opacity))
-                    }
-                }
+                sessionPickerContent(geometry: geometry)
+                    .opacity(!showingSettings && shouldShowSessionPicker ? 1 : 0)
+                    .allowsHitTesting(!showingSettings && shouldShowSessionPicker)
+                    .disabled(showingSettings || !shouldShowSessionPicker)
+                    .accessibilityHidden(showingSettings || !shouldShowSessionPicker)
+
+                activityContent(geometry: geometry)
+                    .opacity(!showingSettings && !shouldShowSessionPicker ? 1 : 0)
+                    .allowsHitTesting(!showingSettings && !shouldShowSessionPicker)
+                    .disabled(showingSettings || shouldShowSessionPicker)
+                    .accessibilityHidden(showingSettings || shouldShowSessionPicker)
 
                 PanelSettingsView()
                     .frame(width: geometry.size.width)
                     .offset(x: showingSettings ? 0 : geometry.size.width)
                     .opacity(showingSettings ? 1 : 0)
+                    .allowsHitTesting(showingSettings)
+                    .disabled(!showingSettings)
+                    .accessibilityHidden(!showingSettings)
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: showingSettings)
-        .animation(.easeInOut(duration: 0.25), value: shouldShowSessionPicker)
     }
 
     @ViewBuilder

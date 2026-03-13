@@ -150,6 +150,13 @@ struct GeminiHookInstaller: HookInstallerProtocol {
 
     static func compatibilityIssue() -> String? {
         guard isToolAvailable else { return nil }
+
+        // Avoid false "Unsupported" during synchronous UI reads before a
+        // background probe has had a chance to populate version cache.
+        if Thread.isMainThread, cachedVersion == nil {
+            return nil
+        }
+
         guard !supportsHooksRuntime() else { return nil }
         let version = installedGeminiVersion() ?? "unknown"
         return "Installed Gemini CLI version (\(version)) does not support Notchi hook runtime. Upgrade Gemini CLI to \(minimumHookRuntimeVersion) or newer."
@@ -277,10 +284,14 @@ struct GeminiHookInstaller: HookInstallerProtocol {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: geminiExecutable)
         process.arguments = ["--version"]
+        var environment = ProcessInfo.processInfo.environment
+        environment["PATH"] = normalizedPath(from: environment["PATH"])
+        process.environment = environment
 
         let stdout = Pipe()
+        let stderr = Pipe()
         process.standardOutput = stdout
-        process.standardError = Pipe()
+        process.standardError = stderr
 
         do {
             try process.run()
@@ -295,9 +306,12 @@ struct GeminiHookInstaller: HookInstallerProtocol {
             return nil
         }
 
-        let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let output else {
+        let stdoutText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let stderrText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let output = [stdoutText, stderrText].first { !$0.isEmpty } ?? ""
+        guard !output.isEmpty else {
             cachedVersion = .some(nil)
             return nil
         }
@@ -309,6 +323,27 @@ struct GeminiHookInstaller: HookInstallerProtocol {
         }
         cachedVersion = .some(nil)
         return nil
+    }
+
+    private static func normalizedPath(from existing: String?) -> String {
+        let preferred = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ]
+        let current = (existing ?? "")
+            .split(separator: ":")
+            .map(String.init)
+        var merged: [String] = []
+        for path in preferred + current where !path.isEmpty {
+            if !merged.contains(path) {
+                merged.append(path)
+            }
+        }
+        return merged.joined(separator: ":")
     }
 
     private static func geminiExecutablePath() -> String? {
