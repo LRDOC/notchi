@@ -1,0 +1,117 @@
+name: Release Assets
+
+on:
+  push:
+    tags:
+      - "v*"
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and upload (for example: v1.0.0)"
+        required: true
+        type: string
+
+concurrency:
+  group: release-assets-${{ github.ref_name || github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-assets:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            TAG="${{ github.event.release.tag_name }}"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ -z "${TAG}" ]]; then
+            echo "Failed to resolve tag" >&2
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag=${TAG}, version=${VERSION}"
+
+      - name: Build release app (unsigned)
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project notchi/notchi.xcodeproj \
+            -scheme notchi \
+            -configuration Release \
+            -derivedDataPath "$RUNNER_TEMP/notchi-release" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build
+
+      - name: Package ZIP and DMG
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          PRODUCTS_DIR="$RUNNER_TEMP/notchi-release/Build/Products/Release"
+          APP_PATH="$(find "$PRODUCTS_DIR" -maxdepth 1 -type d -name '*.app' | head -n 1)"
+
+          if [[ -z "$APP_PATH" ]]; then
+            echo "Could not find built .app in $PRODUCTS_DIR" >&2
+            ls -la "$PRODUCTS_DIR" || true
+            exit 1
+          fi
+
+          VERSION="${{ steps.meta.outputs.version }}"
+          OUT_DIR="$RUNNER_TEMP/release-assets"
+          ZIP_PATH="$OUT_DIR/Notchi-${VERSION}.zip"
+          DMG_PATH="$OUT_DIR/Notchi-${VERSION}.dmg"
+
+          mkdir -p "$OUT_DIR"
+
+          ditto -ck --sequesterRsrc --keepParent \
+            "$APP_PATH" \
+            "$ZIP_PATH"
+
+          DMG_STAGING="$RUNNER_TEMP/notchi-dmg-staging"
+          rm -rf "$DMG_STAGING"
+          mkdir -p "$DMG_STAGING"
+          cp -R "$APP_PATH" "$DMG_STAGING/"
+          ln -s /Applications "$DMG_STAGING/Applications"
+
+          hdiutil create \
+            -volname "Notchi" \
+            -srcfolder "$DMG_STAGING" \
+            -ov \
+            -format UDZO \
+            "$DMG_PATH"
+
+          echo "zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
+          echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
+          echo "Packaged artifacts:"
+          ls -lh "$ZIP_PATH" "$DMG_PATH"
+
+      - name: Upload assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          files: |
+            ${{ steps.package.outputs.zip_path }}
+            ${{ steps.package.outputs.dmg_path }}
+          generate_release_notes: true
+          overwrite_files: true
