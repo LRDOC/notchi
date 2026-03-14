@@ -47,6 +47,7 @@ FUTURE_WORK.md
 *.dmg
 *.app
 *.pkg
+dist/
 
 # Website
 website/node_modules/
