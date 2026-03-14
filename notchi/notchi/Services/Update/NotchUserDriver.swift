@@ -138,7 +138,7 @@ nonisolated class NotchUserDriver: NSObject, SPUUserDriver {
 
     nonisolated func dismissUpdateInstallation() {
         Task { @MainActor in
-            UpdateManager.shared.dismiss()
+            UpdateManager.shared.sparkleDidDismiss()
         }
     }
 

@@ -156,10 +156,13 @@ class UpdateManager: NSObject, ObservableObject {
         state = .error(message: message)
     }
 
-    func dismiss() {
+    func sparkleDidDismiss() {
         installHandler?(.dismiss)
         installHandler = nil
         cancellationHandler = nil
+        // Sparkle calls dismissUpdateInstallation() right after noUpdateFound(),
+        // which would reset state before the 5-second "up to date" display timer expires.
+        if case .upToDate = state { return }
         state = .idle
     }
 }

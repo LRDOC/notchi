@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let updater: SPUUpdater
     private let userDriver: NotchUserDriver
+    private var updaterStarted = false
 
     override init() {
         userDriver = NotchUserDriver()
@@ -23,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             try updater.start()
+            updaterStarted = true
         } catch {
             print("Failed to start Sparkle updater: \(error)")
         }
@@ -34,7 +36,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         observeScreenChanges()
         startHookServices()
         startUsageService()
-        updater.checkForUpdates()
+        if updaterStarted {
+            updater.checkForUpdates()
+        }
     }
 
     private func startHookServices() {

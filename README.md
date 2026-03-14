@@ -8,10 +8,19 @@ https://github.com/user-attachments/assets/e417bd40-cae8-47c0-998a-905166cf3513
 
 - Reacts to CLI agent events in real-time (thinking, working, errors, completions)
 - Analyzes conversation sentiment to show emotions (happy, sad, neutral, sob)
-- Click to expand and see session usage
+- Click to expand and see session time and usage quota
 - Supports multiple concurrent sessions with individual sprites
 - Sound effects for events (optional, auto-muted when terminal is focused)
 - Auto-updates via Sparkle
+
+## Requirements
+
+- macOS 15.0+ (Sequoia)
+- MacBook with notch
+- At least one supported CLI installed:
+  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+  - [Gemini CLI](https://github.com/google-gemini/gemini-cli) `>= 0.33.0`
+  - [Codex CLI](https://github.com/openai/codex)
 
 ## Install
 
@@ -72,15 +81,6 @@ Per-tool status badges:
 - `Not Found`: CLI config directory not detected on disk
 - Toggle enabled: installed and active
 
-## Requirements
-
-- macOS 15.0+ (Sequoia)
-- MacBook with notch
-- At least one supported CLI installed:
-  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-  - [Gemini CLI](https://github.com/google-gemini/gemini-cli) `>= 0.33.0`
-  - [Codex CLI](https://github.com/openai/codex)
-
 ## How it works
 
 ```
@@ -120,10 +120,15 @@ Notes:
 2. Trigger a fresh prompt in the CLI (hooks emit on events).
 3. Re-run `Hooks` install from Settings.
 
+## Contributing
+
+If you have any bugs, ideas, or would like to contribute through pull requests, please check out [Contributing to Notchi](CONTRIBUTING.md).
+
 ## Credits
 
-- [Claude Island](https://github.com/farouqaldori/claude-island)
-- [Readout](https://readout.org)
+- [Claude Island](https://github.com/farouqaldori/claude-island) — design inspiration for the app
+- [Readout](https://readout.org) — design inspiration for [notchi.app](https://notchi.app)
+- [Aseprite](https://www.aseprite.org/) — sprite design
 
 ## License
 
