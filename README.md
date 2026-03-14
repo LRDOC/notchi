@@ -28,6 +28,22 @@ https://github.com/user-attachments/assets/e417bd40-cae8-47c0-998a-905166cf3513
 
 6. Start using your CLI agent and watch Notchi react
 
+## Release Packaging
+
+Installable assets are built automatically by GitHub Actions:
+
+- Workflow: `.github/workflows/release-assets.yml`
+- Trigger: push a `v*` tag (for example `v1.0.0`) or publish a GitHub release
+- Output assets: `Notchi-<version>.zip` and `Notchi-<version>.dmg` attached to the release
+
+Build assets locally (same output names) with:
+
+```bash
+./scripts/build-release-assets.sh v1.0.0
+```
+
+This writes artifacts to `dist/` by default.
+
 ## CLI Hook Setup (Claude, Gemini, Codex)
 
 Notchi installs local hook scripts and registers them with each CLI:

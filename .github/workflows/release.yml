@@ -14,6 +14,7 @@ permissions:
 
 jobs:
   release:
+    if: ${{ secrets.APPLE_CERTIFICATE_P12 != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' && secrets.SPARKLE_PRIVATE_KEY != '' }}
     runs-on: macos-15
     steps:
       - name: Checkout
