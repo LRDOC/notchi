@@ -1,24 +1,17 @@
-name: Release Assets
+name: Main Auto Release
 
 on:
   push:
-    tags:
-      - "v*"
-  release:
-    types: [published]
+    branches:
+      - "main"
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Tag to build and upload (for example: v1.0.0)"
-        required: true
-        type: string
-
-concurrency:
-  group: release-assets-${{ github.ref_name || github.event.release.tag_name || inputs.tag }}
-  cancel-in-progress: false
 
 permissions:
   contents: write
+
+concurrency:
+  group: main-auto-release-${{ github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   build-assets:
@@ -32,23 +25,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            TAG="${{ github.event.release.tag_name }}"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            TAG="${{ inputs.tag }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
+          SHORT_SHA="${GITHUB_SHA::7}"
+          TAG="main-${SHORT_SHA}"
+          NAME="Main build ${SHORT_SHA}"
+          VERSION="${SHORT_SHA}"
 
-          if [[ -z "${TAG}" ]]; then
-            echo "Failed to resolve tag" >&2
-            exit 1
-          fi
-
-          VERSION="${TAG#v}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "Resolved tag=${TAG}, version=${VERSION}"
 
       - name: Build release app (unsigned)
         shell: bash
@@ -79,8 +63,8 @@ jobs:
 
           VERSION="${{ steps.meta.outputs.version }}"
           OUT_DIR="$RUNNER_TEMP/release-assets"
-          ZIP_PATH="$OUT_DIR/Notchi-${VERSION}.zip"
-          DMG_PATH="$OUT_DIR/Notchi-${VERSION}.dmg"
+          ZIP_PATH="$OUT_DIR/Notchi-main-${VERSION}.zip"
+          DMG_PATH="$OUT_DIR/Notchi-main-${VERSION}.dmg"
 
           mkdir -p "$OUT_DIR"
 
@@ -103,15 +87,21 @@ jobs:
 
           echo "zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
           echo "dmg_path=$DMG_PATH" >> "$GITHUB_OUTPUT"
-          echo "Packaged artifacts:"
-          ls -lh "$ZIP_PATH" "$DMG_PATH"
 
-      - name: Upload assets to GitHub Release
+      - name: Publish pre-release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          prerelease: true
+          generate_release_notes: true
+          body: |
+            Automated build from `main` commit `${{ github.sha }}`.
+
+            Note: This artifact is unsigned and not notarized. If macOS blocks launch after download:
+
+            `xattr -dr com.apple.quarantine /Applications/notchi.app`
           files: |
             ${{ steps.package.outputs.zip_path }}
             ${{ steps.package.outputs.dmg_path }}
-          generate_release_notes: true
           overwrite_files: true

@@ -33,16 +33,22 @@ https://github.com/user-attachments/assets/e417bd40-cae8-47c0-998a-905166cf3513
 Installable assets are built automatically by GitHub Actions:
 
 - Workflow: `.github/workflows/release-assets.yml`
-- Trigger: push a `v*` tag (for example `v1.0.0`) or publish a GitHub release
-- Output assets: `Notchi-<version>.zip` and `Notchi-<version>.dmg` attached to the release
+- Trigger: every push to `main` creates an auto pre-release
+- Output assets: `Notchi-main-<sha>.zip` and `Notchi-main-<sha>.dmg`
 
-Build assets locally (same output names) with:
+These auto pre-release artifacts are unsigned. If macOS blocks launch after download, run:
 
-```bash
-./scripts/build-release-assets.sh v1.0.0
-```
+- `xattr -dr com.apple.quarantine /Applications/notchi.app`
 
-This writes artifacts to `dist/` by default.
+Versioned `v*` tag releases are handled by `.github/workflows/release.yml` (signed/notarized when secrets are configured).
+## CI Releases
+
+- Every push to `main` now creates a GitHub pre-release automatically via `.github/workflows/release-assets.yml`.
+- These auto pre-release artifacts are unsigned (for fast CI packaging).
+- If macOS blocks launch after download, run:
+  - `xattr -dr com.apple.quarantine /Applications/notchi.app`
+
+Versioned `v*` tag releases are handled by `.github/workflows/release.yml` (signed/notarized when secrets are configured).
 
 ## CLI Hook Setup (Claude, Gemini, Codex)
 
