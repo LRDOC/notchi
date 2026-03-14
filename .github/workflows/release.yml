@@ -13,8 +13,42 @@ permissions:
   contents: write
 
 jobs:
+  check-secrets:
+    runs-on: macos-15
+    outputs:
+      enabled: ${{ steps.check.outputs.enabled }}
+    steps:
+      - name: Check signing/notarization secrets
+        id: check
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          required=(
+            APPLE_CERTIFICATE_P12
+            APPLE_CERTIFICATE_PASSWORD
+            APPLE_ID
+            APPLE_TEAM_ID
+            APPLE_APP_PASSWORD
+            SPARKLE_PRIVATE_KEY
+          )
+          for key in "${required[@]}"; do
+            if [[ -z "${!key:-}" ]]; then
+              echo "enabled=false" >> "$GITHUB_OUTPUT"
+              echo "Skipping signed release job: missing secret $key"
+              exit 0
+            fi
+          done
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
   release:
-    if: ${{ secrets.APPLE_CERTIFICATE_P12 != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' && secrets.SPARKLE_PRIVATE_KEY != '' }}
+    needs: check-secrets
+    if: ${{ needs.check-secrets.outputs.enabled == 'true' }}
     runs-on: macos-15
     steps:
       - name: Checkout
