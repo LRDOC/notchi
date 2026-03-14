@@ -68,6 +68,10 @@ jobs:
 
           mkdir -p "$OUT_DIR"
 
+          # Ensure the app bundle has a complete signature (prevents "damaged" launch errors).
+          codesign --force --deep --sign - "$APP_PATH"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
           ditto -ck --sequesterRsrc --keepParent \
             "$APP_PATH" \
             "$ZIP_PATH"
@@ -75,7 +79,7 @@ jobs:
           DMG_STAGING="$RUNNER_TEMP/notchi-dmg-staging"
           rm -rf "$DMG_STAGING"
           mkdir -p "$DMG_STAGING"
-          cp -R "$APP_PATH" "$DMG_STAGING/"
+          ditto "$APP_PATH" "$DMG_STAGING/$(basename "$APP_PATH")"
           ln -s /Applications "$DMG_STAGING/Applications"
 
           hdiutil create \

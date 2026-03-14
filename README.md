@@ -15,7 +15,7 @@ https://github.com/user-attachments/assets/e417bd40-cae8-47c0-998a-905166cf3513
 
 ## Install
 
-1. Download `Notchi-x.x.x.dmg` from the [latest GitHub Release](https://github.com/sk-ruban/notchi/releases/latest)
+1. Download `Notchi-x.x.x.dmg` from the [latest GitHub Release](https://github.com/LRDOC/notchi/releases/latest)
 2. Open the DMG and drag Notchi to Applications
 3. Launch Notchi — it auto-installs hooks for detected CLIs on first launch
 4. A macOS keychain popup will appear asking to access Claude Code's cached OAuth token (used for API usage stats). Click **Always Allow** so it won't prompt again on future launches
@@ -36,17 +36,9 @@ Installable assets are built automatically by GitHub Actions:
 - Trigger: every push to `main` creates an auto pre-release
 - Output assets: `Notchi-main-<sha>.zip` and `Notchi-main-<sha>.dmg`
 
-These auto pre-release artifacts are unsigned. If macOS blocks launch after download, run:
+These auto pre-release artifacts are ad-hoc signed but not notarized. If macOS blocks launch after download, run:
 
 - `xattr -dr com.apple.quarantine /Applications/notchi.app`
-
-Versioned `v*` tag releases are handled by `.github/workflows/release.yml` (signed/notarized when secrets are configured).
-## CI Releases
-
-- Every push to `main` now creates a GitHub pre-release automatically via `.github/workflows/release-assets.yml`.
-- These auto pre-release artifacts are unsigned (for fast CI packaging).
-- If macOS blocks launch after download, run:
-  - `xattr -dr com.apple.quarantine /Applications/notchi.app`
 
 Versioned `v*` tag releases are handled by `.github/workflows/release.yml` (signed/notarized when secrets are configured).
 

@@ -110,6 +110,8 @@ jobs:
           echo "SPARKLE_BIN_DIR=$SPARKLE_BIN_DIR" >> $GITHUB_OUTPUT
 
       - name: Build and archive
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           xcodebuild archive \
             -project notchi/notchi.xcodeproj \
@@ -118,12 +120,14 @@ jobs:
             -archivePath $RUNNER_TEMP/notchi.xcarchive \
             CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY="Developer ID Application" \
-            DEVELOPMENT_TEAM=SXT98GH5HN
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
 
       - name: Export archive
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           /usr/libexec/PlistBuddy -c "Add :method string developer-id" $RUNNER_TEMP/export.plist
-          /usr/libexec/PlistBuddy -c "Add :teamID string SXT98GH5HN" $RUNNER_TEMP/export.plist
+          /usr/libexec/PlistBuddy -c "Add :teamID string $APPLE_TEAM_ID" $RUNNER_TEMP/export.plist
 
           xcodebuild -exportArchive \
             -archivePath $RUNNER_TEMP/notchi.xcarchive \
@@ -154,7 +158,7 @@ jobs:
         run: |
           DMG_DIR=$RUNNER_TEMP/dmg_staging
           mkdir -p "$DMG_DIR"
-          cp -R "$RUNNER_TEMP/export/Notchi.app" "$DMG_DIR/"
+          ditto "$RUNNER_TEMP/export/Notchi.app" "$DMG_DIR/Notchi.app"
           ln -s /Applications "$DMG_DIR/Applications"
           hdiutil create -volname "Notchi" -srcfolder "$DMG_DIR" \
             -ov -format UDZO "$RUNNER_TEMP/Notchi-$VERSION.dmg"
@@ -178,6 +182,7 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
           SPARKLE_BIN_DIR: ${{ steps.sparkle.outputs.SPARKLE_BIN_DIR }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           mkdir -p $RUNNER_TEMP/appcast_staging
           cp "$RUNNER_TEMP/Notchi-$VERSION.dmg" $RUNNER_TEMP/appcast_staging/
@@ -185,7 +190,7 @@ jobs:
 
           "$SPARKLE_BIN_DIR/generate_appcast" \
             --ed-key-file "$RUNNER_TEMP/sparkle_key" \
-            --download-url-prefix "https://github.com/sk-ruban/notchi/releases/download/v$VERSION/" \
+            --download-url-prefix "https://github.com/$REPOSITORY/releases/download/v$VERSION/" \
             -o docs/appcast.xml \
             $RUNNER_TEMP/appcast_staging
 
