@@ -13,6 +13,7 @@ final class NotchiStateMachine {
     private var emotionDecayTimer: Task<Void, Never>?
     private var pendingSyncTasks: [String: Task<Void, Never>] = [:]
     private var pendingPositionMarks: [String: Task<Void, Never>] = [:]
+    private var transientActivityTasks: [String: Task<Void, Never>] = [:]
     private var fileWatchers: [String: (source: DispatchSourceFileSystemObject, fd: Int32)] = [:]
 
     private static let syncDebounce: Duration = .milliseconds(100)
@@ -27,18 +28,32 @@ final class NotchiStateMachine {
     }
 
     func handleEvent(_ event: HookEvent) {
-        let session = sessionStore.process(event)
-        let isDone = event.status == "waiting_for_input"
+        let source = AIToolSource(rawString: event.resolvedSource)
+        guard AppSettings.isToolEnabled(source) else { return }
+        guard let session = sessionStore.process(event) else { return }
 
-        switch event.event {
+        let isDone = event.status == "waiting_for_input"
+        let isClaudeSource = source == .claude
+        let normalizedEvent = SessionStore.normalizedEvent(event.event)
+
+        switch normalizedEvent {
         case "UserPromptSubmit":
-            pendingPositionMarks[event.sessionId] = Task {
-                await ConversationParser.shared.markCurrentPosition(
-                    sessionId: event.sessionId,
-                    cwd: event.cwd
-                )
+            if isClaudeSource {
+                pendingPositionMarks[event.sessionId] = Task {
+                    await ConversationParser.shared.markCurrentPosition(
+                        sessionId: event.sessionId,
+                        cwd: event.cwd,
+                        source: source,
+                        transcriptPath: session.transcriptPath
+                    )
+                }
+            } else {
+                pendingPositionMarks.removeValue(forKey: event.sessionId)?.cancel()
             }
-            startFileWatcher(sessionId: event.sessionId, cwd: event.cwd)
+
+            if isClaudeSource {
+                startFileWatcher(sessionId: event.sessionId, cwd: event.cwd)
+            }
 
             if let prompt = event.userPrompt {
                 Task {
@@ -56,15 +71,29 @@ final class NotchiStateMachine {
             SoundService.shared.playNotificationSound()
 
         case "PostToolUse":
-            scheduleFileSync(sessionId: event.sessionId, cwd: event.cwd)
+            scheduleFileSync(
+                sessionId: event.sessionId,
+                cwd: event.cwd,
+                source: source,
+                transcriptPath: session.transcriptPath
+            )
 
         case "Stop":
             SoundService.shared.playNotificationSound()
-            stopFileWatcher(sessionId: event.sessionId)
-            scheduleFileSync(sessionId: event.sessionId, cwd: event.cwd)
+            if isClaudeSource {
+                stopFileWatcher(sessionId: event.sessionId)
+            }
+            scheduleFileSync(
+                sessionId: event.sessionId,
+                cwd: event.cwd,
+                source: source,
+                transcriptPath: session.transcriptPath
+            )
 
         case "SessionEnd":
-            stopFileWatcher(sessionId: event.sessionId)
+            if isClaudeSource {
+                stopFileWatcher(sessionId: event.sessionId)
+            }
             pendingSyncTasks.removeValue(forKey: event.sessionId)?.cancel()
             pendingPositionMarks.removeValue(forKey: event.sessionId)?.cancel()
             Task { await ConversationParser.shared.resetState(for: event.sessionId) }
@@ -82,7 +111,12 @@ final class NotchiStateMachine {
         session.resetSleepTimer()
     }
 
-    private func scheduleFileSync(sessionId: String, cwd: String) {
+    private func scheduleFileSync(
+        sessionId: String,
+        cwd: String,
+        source: AIToolSource,
+        transcriptPath: String?
+    ) {
         pendingSyncTasks[sessionId]?.cancel()
         pendingSyncTasks[sessionId] = Task {
             // Wait for position marking to complete first
@@ -93,11 +127,32 @@ final class NotchiStateMachine {
 
             let result = await ConversationParser.shared.parseIncremental(
                 sessionId: sessionId,
-                cwd: cwd
+                cwd: cwd,
+                source: source,
+                transcriptPath: transcriptPath
             )
+
+            if let prompt = Self.cleanedPrompt(result.latestUserPrompt),
+               let session = sessionStore.sessions[sessionId],
+               session.lastUserPrompt != prompt {
+                session.recordUserPrompt(prompt)
+            }
+
+            if let session = sessionStore.sessions[sessionId],
+               let earliestActivity = Self.earliestActivityTimestamp(from: result) {
+                session.backdatePromptSubmitTimeIfNeeded(earliestActivity.addingTimeInterval(-0.1))
+            }
+
+            if !result.toolEvents.isEmpty {
+                sessionStore.recordParsedToolEvents(result.toolEvents, for: sessionId)
+            }
 
             if !result.messages.isEmpty {
                 sessionStore.recordAssistantMessages(result.messages, for: sessionId)
+            }
+
+            if !result.messages.isEmpty || !result.toolEvents.isEmpty {
+                pulseTransientActivity(sessionId: sessionId, source: source)
             }
 
             guard let session = sessionStore.sessions[sessionId] else {
@@ -115,6 +170,40 @@ final class NotchiStateMachine {
             }
 
             pendingSyncTasks.removeValue(forKey: sessionId)
+        }
+    }
+
+    private static func cleanedPrompt(_ prompt: String?) -> String? {
+        guard let prompt else { return nil }
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func earliestActivityTimestamp(from result: ParseResult) -> Date? {
+        let messageTimes = result.messages.map(\.timestamp)
+        let toolTimes = result.toolEvents.map(\.timestamp)
+        return (messageTimes + toolTimes).min()
+    }
+
+    private func pulseTransientActivity(sessionId: String, source: AIToolSource) {
+        guard source != .claude else { return }
+        guard let session = sessionStore.sessions[sessionId] else { return }
+        guard !session.isProcessing else { return }
+
+        transientActivityTasks[sessionId]?.cancel()
+        session.updateTask(.working)
+
+        transientActivityTasks[sessionId] = Task {
+            try? await Task.sleep(for: .seconds(1.1))
+            guard !Task.isCancelled else { return }
+            guard let session = sessionStore.sessions[sessionId] else {
+                transientActivityTasks.removeValue(forKey: sessionId)
+                return
+            }
+            if !session.isProcessing && session.task == .working {
+                session.updateTask(.idle)
+            }
+            transientActivityTasks.removeValue(forKey: sessionId)
         }
     }
 
@@ -136,7 +225,12 @@ final class NotchiStateMachine {
         )
 
         source.setEventHandler { [weak self] in
-            self?.scheduleFileSync(sessionId: sessionId, cwd: cwd)
+            self?.scheduleFileSync(
+                sessionId: sessionId,
+                cwd: cwd,
+                source: .claude,
+                transcriptPath: nil
+            )
         }
 
         source.setCancelHandler {

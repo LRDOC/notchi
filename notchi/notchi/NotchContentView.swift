@@ -18,6 +18,7 @@ struct NotchContentView: View {
     var stateMachine: NotchiStateMachine = .shared
     var panelManager: NotchPanelManager = .shared
     var usageService: ClaudeUsageService = .shared
+    var localUsageService: LocalUsageService = .shared
     @State private var showingPanelSettings = false
     @State private var showingSessionActivity = false
     @State private var isMuted = AppSettings.isMuted
@@ -145,54 +146,50 @@ struct NotchContentView: View {
                 headerRow
                     .frame(height: notchSize.height)
 
-                if isExpanded {
-                    ExpandedPanelView(
-                        sessionStore: sessionStore,
-                        usageService: usageService,
-                        showingSettings: $showingPanelSettings,
-                        showingSessionActivity: $showingSessionActivity,
-                        isActivityCollapsed: $isActivityCollapsed
-                    )
-                    .frame(
-                        width: NotchConstants.expandedPanelSize.width - 48,
-                        height: expandedPanelHeight
-                    )
-                    .transition(
-                        .asymmetric(
-                            insertion: .scale(scale: 0.8, anchor: .top)
-                                .combined(with: .opacity)
-                                .animation(.smooth(duration: 0.35)),
-                            removal: .opacity.animation(.easeOut(duration: 0.15))
-                        )
-                    )
-                }
+                ExpandedPanelView(
+                    sessionStore: sessionStore,
+                    usageService: usageService,
+                    localUsageService: localUsageService,
+                    showingSettings: $showingPanelSettings,
+                    showingSessionActivity: $showingSessionActivity,
+                    isActivityCollapsed: $isActivityCollapsed
+                )
+                .frame(
+                    width: isExpanded ? (NotchConstants.expandedPanelSize.width - 48) : 0,
+                    height: isExpanded ? expandedPanelHeight : 0
+                )
+                .opacity(isExpanded ? 1 : 0)
+                .allowsHitTesting(isExpanded)
+                .accessibilityHidden(!isExpanded)
+                .clipped()
             }
 
-            if isExpanded {
-                HStack {
-                    if shouldShowBackButton {
-                        backButton
-                            .padding(.leading, 15)
-                    } else {
-                        HStack(spacing: 8) {
-                            PanelHeaderButton(
-                                sfSymbol: panelManager.isPinned ? "pin.fill" : "pin",
-                                action: { panelManager.togglePin() }
-                            )
-                            PanelHeaderButton(
-                                sfSymbol: isMuted ? "bell.slash" : "bell",
-                                action: toggleMute
-                            )
-                        }
-                        .padding(.leading, 12)
+            HStack {
+                if shouldShowBackButton {
+                    backButton
+                        .padding(.leading, 15)
+                } else {
+                    HStack(spacing: 8) {
+                        PanelHeaderButton(
+                            sfSymbol: panelManager.isPinned ? "pin.fill" : "pin",
+                            action: { panelManager.togglePin() }
+                        )
+                        PanelHeaderButton(
+                            sfSymbol: isMuted ? "bell.slash" : "bell",
+                            action: toggleMute
+                        )
                     }
-                    Spacer()
-                    headerButtons
+                    .padding(.leading, 12)
                 }
-                .padding(.top, 4)
-                .padding(.horizontal, 8)
-                .frame(width: NotchConstants.expandedPanelSize.width - 48)
+                Spacer()
+                headerButtons
             }
+            .padding(.top, 4)
+            .padding(.horizontal, 8)
+            .frame(width: isExpanded ? (NotchConstants.expandedPanelSize.width - 48) : 0)
+            .opacity(isExpanded ? 1 : 0)
+            .allowsHitTesting(isExpanded)
+            .accessibilityHidden(!isExpanded)
         }
     }
 
@@ -242,7 +239,7 @@ struct NotchContentView: View {
 
     @ViewBuilder
     private var headerSprites: some View {
-        let topSession = sessionStore.sortedSessions.first
+        let topSession = sessionStore.effectiveSession
         SessionSpriteView(
             state: topSession?.state ?? .idle,
             isSelected: true

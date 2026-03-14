@@ -91,16 +91,25 @@ enum NotchiEmotion: String, CaseIterable {
 struct NotchiState: Equatable {
     var task: NotchiTask
     var emotion: NotchiEmotion = .neutral
+    var character: SpriteCharacter = .notchi
 
-    /// Resolves the sprite sheet name with fallback chain: exact emotion -> sad (for sob) -> neutral.
+    /// Resolves the sprite sheet name with fallback chain:
+    /// 1. {character}_{task}_{emotion}
+    /// 2. {character}_{task}_sad (for sob)
+    /// 3. {character}_{task}_neutral
+    /// 4. notchi_idle_neutral (ultimate safety net)
     var spriteSheetName: String {
-        let name = "\(task.spritePrefix)_\(emotion.rawValue)"
+        let name = "\(character.spritePrefix)_\(task.spritePrefix)_\(emotion.rawValue)"
         if NSImage(named: name) != nil { return name }
         if emotion == .sob {
-            let sadName = "\(task.spritePrefix)_sad"
+            let sadName = "\(character.spritePrefix)_\(task.spritePrefix)_sad"
             if NSImage(named: sadName) != nil { return sadName }
         }
-        return "\(task.spritePrefix)_neutral"
+        let neutralName = "\(character.spritePrefix)_\(task.spritePrefix)_neutral"
+        if NSImage(named: neutralName) != nil { return neutralName }
+        let characterIdle = "\(character.spritePrefix)_idle_neutral"
+        if NSImage(named: characterIdle) != nil { return characterIdle }
+        return "notchi_idle_neutral"
     }
     var animationFPS: Double { task.animationFPS }
     var bobDuration: Double { task.bobDuration }

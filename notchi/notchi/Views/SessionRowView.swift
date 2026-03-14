@@ -16,10 +16,19 @@ struct SessionRowView: View {
                     .frame(width: 5, height: 5)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(session.displayTitle)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(TerminalColors.primaryText)
-                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        Text(session.displayTitle)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(TerminalColors.primaryText)
+                            .lineLimit(1)
+
+                        if session.source != .claude {
+                            Circle()
+                                .fill(session.source.badgeColor)
+                                .frame(width: 5, height: 5)
+                                .help(session.source.displayName)
+                        }
+                    }
 
                     if let preview = session.activityPreview {
                         Text(preview)

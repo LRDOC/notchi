@@ -22,6 +22,7 @@ enum ActivityItem: Identifiable {
 struct ExpandedPanelView: View {
     let sessionStore: SessionStore
     let usageService: ClaudeUsageService
+    let localUsageService: LocalUsageService
     @Binding var showingSettings: Bool
     @Binding var showingSessionActivity: Bool
     @Binding var isActivityCollapsed: Bool
@@ -40,17 +41,24 @@ struct ExpandedPanelView: View {
 
     private var hasActivity: Bool {
         guard let session = effectiveSession else { return false }
-        return !session.recentEvents.isEmpty ||
-               !session.recentAssistantMessages.isEmpty ||
+        return !unifiedActivityItems.isEmpty ||
                session.isProcessing ||
                showIndicator ||
-               session.lastUserPrompt != nil
+               session.lastUserPrompt != nil ||
+               !session.pendingQuestions.isEmpty
     }
 
     private var unifiedActivityItems: [ActivityItem] {
         guard let session = effectiveSession else { return [] }
-        let toolItems = session.recentEvents.map { ActivityItem.tool($0) }
-        let messageItems = session.recentAssistantMessages.map { ActivityItem.assistant($0) }
+
+        let filteredToolEvents = session.recentEvents
+            .filter { $0.type != "UserPromptSubmit" }
+
+        let filteredMessages = session.recentAssistantMessages
+
+        let toolItems = filteredToolEvents
+            .map { ActivityItem.tool($0) }
+        let messageItems = filteredMessages.map { ActivityItem.assistant($0) }
         return (toolItems + messageItems).sorted { $0.timestamp < $1.timestamp }
     }
 
@@ -58,27 +66,42 @@ struct ExpandedPanelView: View {
         sessionStore.activeSessionCount >= 2 && !showingSessionActivity
     }
 
+    private var usageRefreshTrigger: String {
+        let sessions = sessionStore.sortedSessions
+            .map {
+                "\($0.id):\($0.source.rawValue):\($0.recentEvents.count):\($0.recentAssistantMessages.count)"
+            }
+            .joined(separator: "|")
+        return "\(sessions):\(usageService.currentUsage?.usagePercentage ?? -1):\(usageService.error ?? ""):\(AppSettings.isUsageEnabled)"
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                if !showingSettings {
-                    if shouldShowSessionPicker {
-                        sessionPickerContent(geometry: geometry)
-                            .transition(.move(edge: .leading).combined(with: .opacity))
-                    } else {
-                        activityContent(geometry: geometry)
-                            .transition(.move(edge: .leading).combined(with: .opacity))
-                    }
-                }
+                sessionPickerContent(geometry: geometry)
+                    .opacity(!showingSettings && shouldShowSessionPicker ? 1 : 0)
+                    .allowsHitTesting(!showingSettings && shouldShowSessionPicker)
+                    .disabled(showingSettings || !shouldShowSessionPicker)
+                    .accessibilityHidden(showingSettings || !shouldShowSessionPicker)
+
+                activityContent(geometry: geometry)
+                    .opacity(!showingSettings && !shouldShowSessionPicker ? 1 : 0)
+                    .allowsHitTesting(!showingSettings && !shouldShowSessionPicker)
+                    .disabled(showingSettings || shouldShowSessionPicker)
+                    .accessibilityHidden(showingSettings || shouldShowSessionPicker)
 
                 PanelSettingsView()
                     .frame(width: geometry.size.width)
                     .offset(x: showingSettings ? 0 : geometry.size.width)
                     .opacity(showingSettings ? 1 : 0)
+                    .allowsHitTesting(showingSettings)
+                    .disabled(!showingSettings)
+                    .accessibilityHidden(!showingSettings)
             }
         }
-        .animation(.easeInOut(duration: 0.25), value: showingSettings)
-        .animation(.easeInOut(duration: 0.25), value: shouldShowSessionPicker)
+        .task(id: usageRefreshTrigger) {
+            await localUsageService.refreshAll()
+        }
     }
 
     @ViewBuilder
@@ -112,13 +135,7 @@ struct ExpandedPanelView: View {
 
                 Spacer()
 
-                UsageBarView(
-                    usage: usageService.currentUsage,
-                    isLoading: usageService.isLoading,
-                    error: usageService.error,
-                    onConnect: { ClaudeUsageService.shared.connectAndStartPolling() },
-                    onRetry: { ClaudeUsageService.shared.retryNow() }
-                )
+                usageFooter(compact: false)
             }
             .padding(.horizontal, 12)
         }
@@ -155,14 +172,7 @@ struct ExpandedPanelView: View {
                     WorkingIndicatorView(state: state)
                 }
 
-                UsageBarView(
-                    usage: usageService.currentUsage,
-                    isLoading: usageService.isLoading,
-                    error: usageService.error,
-                    compact: isActivityCollapsed,
-                    onConnect: { ClaudeUsageService.shared.connectAndStartPolling() },
-                    onRetry: { ClaudeUsageService.shared.retryNow() }
-                )
+                usageFooter(compact: isActivityCollapsed)
             }
             .padding(.horizontal, 12)
         }
@@ -247,11 +257,11 @@ struct ExpandedPanelView: View {
     }
 
     private var emptyState: some View {
-        let hooksInstalled = HookInstaller.isInstalled()
+        let hooksInstalled = HookInstallerCoordinator.isAnyInstalled()
         let title = hooksInstalled ? "Waiting for activity" : "Hooks not installed"
         let subtitle = hooksInstalled
-            ? "Send a message in Claude Code to start tracking"
-            : "Open settings to set up Claude Code integration"
+            ? "Send a message in any connected CLI to start tracking"
+            : "Open settings to install hooks for your CLI"
 
         return VStack(spacing: 8) {
             Text(title)
@@ -262,6 +272,21 @@ struct ExpandedPanelView: View {
                 .foregroundColor(TerminalColors.dimmedText)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func usageFooter(compact: Bool) -> some View {
+        MultiUsageBarsView(
+            claudeUsage: usageService.currentUsage,
+            claudeLoading: usageService.isLoading,
+            claudeError: usageService.error,
+            claudeEnabled: AppSettings.isUsageEnabled,
+            codexUsage: localUsageService.codexUsage,
+            geminiUsage: localUsageService.geminiUsage,
+            localLoading: localUsageService.isLoading,
+            compact: compact,
+            onClaudeConnect: { ClaudeUsageService.shared.connectAndStartPolling() },
+            onClaudeRetry: { ClaudeUsageService.shared.retryNow() }
+        )
     }
 }
 

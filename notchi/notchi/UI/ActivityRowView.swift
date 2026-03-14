@@ -9,7 +9,7 @@ struct ActivityRowView: View {
             HStack(spacing: 8) {
                 bullet
                 toolName
-                if event.status != .running {
+                if shouldShowStatusLabel {
                     statusLabel
                 }
             }
@@ -41,9 +41,38 @@ struct ActivityRowView: View {
     }
 
     private var toolName: some View {
-        Text(event.tool ?? event.type)
+        Text(eventDisplayTitle)
             .font(.system(size: 13, weight: .semibold))
             .foregroundColor(TerminalColors.primaryText)
+    }
+
+    private var shouldShowStatusLabel: Bool {
+        isToolEvent && event.status != .running
+    }
+
+    private var isToolEvent: Bool {
+        event.tool != nil || event.type == "PreToolUse" || event.type == "PostToolUse"
+    }
+
+    private var eventDisplayTitle: String {
+        if let tool = event.tool {
+            return tool
+        }
+
+        switch event.type {
+        case "UserPromptSubmit":
+            return "Prompt"
+        case "SessionStart", "SessionEnd":
+            return "Session"
+        case "PreCompact":
+            return "Compacting"
+        case "Stop", "SubagentStop":
+            return "Ready"
+        case "PermissionRequest":
+            return "Permission"
+        default:
+            return event.type
+        }
     }
 
     private var statusLabel: some View {
