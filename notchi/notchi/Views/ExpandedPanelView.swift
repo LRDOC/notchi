@@ -22,6 +22,7 @@ enum ActivityItem: Identifiable {
 struct ExpandedPanelView: View {
     let sessionStore: SessionStore
     let usageService: ClaudeUsageService
+    let localUsageService: LocalUsageService
     @Binding var showingSettings: Bool
     @Binding var showingSessionActivity: Bool
     @Binding var isActivityCollapsed: Bool
@@ -65,6 +66,15 @@ struct ExpandedPanelView: View {
         sessionStore.activeSessionCount >= 2 && !showingSessionActivity
     }
 
+    private var usageRefreshTrigger: String {
+        let sessions = sessionStore.sortedSessions
+            .map {
+                "\($0.id):\($0.source.rawValue):\($0.recentEvents.count):\($0.recentAssistantMessages.count)"
+            }
+            .joined(separator: "|")
+        return "\(sessions):\(usageService.currentUsage?.usagePercentage ?? -1):\(usageService.error ?? ""):\(AppSettings.isUsageEnabled)"
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
@@ -88,6 +98,9 @@ struct ExpandedPanelView: View {
                     .disabled(!showingSettings)
                     .accessibilityHidden(!showingSettings)
             }
+        }
+        .task(id: usageRefreshTrigger) {
+            await localUsageService.refreshAll()
         }
     }
 
@@ -122,13 +135,7 @@ struct ExpandedPanelView: View {
 
                 Spacer()
 
-                UsageBarView(
-                    usage: usageService.currentUsage,
-                    isLoading: usageService.isLoading,
-                    error: usageService.error,
-                    onConnect: { ClaudeUsageService.shared.connectAndStartPolling() },
-                    onRetry: { ClaudeUsageService.shared.retryNow() }
-                )
+                usageFooter(compact: false)
             }
             .padding(.horizontal, 12)
         }
@@ -165,14 +172,7 @@ struct ExpandedPanelView: View {
                     WorkingIndicatorView(state: state)
                 }
 
-                UsageBarView(
-                    usage: usageService.currentUsage,
-                    isLoading: usageService.isLoading,
-                    error: usageService.error,
-                    compact: isActivityCollapsed,
-                    onConnect: { ClaudeUsageService.shared.connectAndStartPolling() },
-                    onRetry: { ClaudeUsageService.shared.retryNow() }
-                )
+                usageFooter(compact: isActivityCollapsed)
             }
             .padding(.horizontal, 12)
         }
@@ -272,6 +272,21 @@ struct ExpandedPanelView: View {
                 .foregroundColor(TerminalColors.dimmedText)
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func usageFooter(compact: Bool) -> some View {
+        MultiUsageBarsView(
+            claudeUsage: usageService.currentUsage,
+            claudeLoading: usageService.isLoading,
+            claudeError: usageService.error,
+            claudeEnabled: AppSettings.isUsageEnabled,
+            codexUsage: localUsageService.codexUsage,
+            geminiUsage: localUsageService.geminiUsage,
+            localLoading: localUsageService.isLoading,
+            compact: compact,
+            onClaudeConnect: { ClaudeUsageService.shared.connectAndStartPolling() },
+            onClaudeRetry: { ClaudeUsageService.shared.retryNow() }
+        )
     }
 }
 

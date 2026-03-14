@@ -9,6 +9,7 @@ struct PanelSettingsView: View {
         uniqueKeysWithValues: AIToolSource.allCases.map { ($0, AppSettings.isToolEnabled($0)) }
     )
     @State private var apiKeyInput = AppSettings.anthropicApiKey ?? ""
+    @State private var localUsageService: LocalUsageService = .shared
     @ObservedObject private var updateManager = UpdateManager.shared
     private var usageConnected: Bool { ClaudeUsageService.shared.isConnected }
     private var hasApiKey: Bool { !apiKeyInput.isEmpty }
@@ -34,7 +35,10 @@ struct PanelSettingsView: View {
         .padding(.horizontal, 12)
         .padding(.top, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onAppear(perform: refreshHookStatus)
+        .onAppear {
+            refreshHookStatus()
+            refreshLocalUsage()
+        }
     }
 
     private var displaySection: some View {
@@ -86,8 +90,64 @@ struct PanelSettingsView: View {
             }
             .buttonStyle(.plain)
 
+            Button(action: refreshLocalUsage) {
+                SettingsRowView(icon: "codex_settings_icon", title: "Codex Usage", iconIsAsset: true) {
+                    statusBadge(codexUsageLabel, color: codexUsageColor)
+                }
+            }
+            .buttonStyle(.plain)
+
+            Button(action: refreshLocalUsage) {
+                SettingsRowView(icon: "gemini_settings_icon", title: "Gemini Usage", iconIsAsset: true) {
+                    statusBadge(geminiUsageLabel, color: geminiUsageColor)
+                }
+            }
+            .buttonStyle(.plain)
+
             apiKeyRow
         }
+    }
+
+    private var codexUsageLabel: String {
+        if localUsageService.isLoading && localUsageService.codexUsage == nil {
+            return "Loading..."
+        }
+        guard let usage = localUsageService.codexUsage else {
+            return "No data"
+        }
+        if let reset = usage.formattedResetTime, let percent = usage.effectivePercentage {
+            return "Reset \(reset) • \(percent)%"
+        }
+        if let percent = usage.effectivePercentage {
+            return "\(percent)% • \(formatCompactTokens(usage.totalTokens)) tok"
+        }
+        return "\(formatCompactTokens(usage.totalTokens)) tok"
+    }
+
+    private var codexUsageColor: Color {
+        guard let percent = localUsageService.codexUsage?.effectivePercentage else {
+            return localUsageService.codexUsage == nil ? TerminalColors.dimmedText : TerminalColors.secondaryText
+        }
+        return usageColor(for: percent)
+    }
+
+    private var geminiUsageLabel: String {
+        if localUsageService.isLoading && localUsageService.geminiUsage == nil {
+            return "Loading..."
+        }
+        guard let usage = localUsageService.geminiUsage else {
+            return "No data"
+        }
+        let contextTokens = usage.inputTokens + usage.outputTokens
+        let contextPercent = Int((min(max(Double(contextTokens) / 1_000_000.0, 0), 1) * 100).rounded())
+        return "~\(contextPercent)% ctx • I \(formatCompactTokens(usage.inputTokens)) • O \(formatCompactTokens(usage.outputTokens))"
+    }
+
+    private var geminiUsageColor: Color {
+        guard let usage = localUsageService.geminiUsage else { return TerminalColors.dimmedText }
+        let contextTokens = usage.inputTokens + usage.outputTokens
+        let contextPercent = Int((min(max(Double(contextTokens) / 1_000_000.0, 0), 1) * 100).rounded())
+        return usageColor(for: contextPercent)
     }
 
     private var apiKeyRow: some View {
@@ -198,6 +258,10 @@ struct PanelSettingsView: View {
         ClaudeUsageService.shared.connectAndStartPolling()
     }
 
+    private func refreshLocalUsage() {
+        Task { await localUsageService.refreshAll() }
+    }
+
     private var hooksStatusBadge: some View {
         Group {
             if !installErrors.isEmpty {
@@ -232,7 +296,7 @@ struct PanelSettingsView: View {
                 installTool(source)
             }
         }) {
-            SettingsRowView(icon: "circle.fill", title: source.displayName) {
+            SettingsRowView(icon: iconName(for: source), title: source.displayName, iconIsAsset: true) {
                 if isInstalled {
                     ToggleSwitch(isOn: isOn)
                 } else if issue != nil {
@@ -247,6 +311,14 @@ struct PanelSettingsView: View {
         .buttonStyle(.plain)
         .opacity(isInstalled || issue != nil ? 1.0 : 0.6)
         .padding(.leading, 12)
+    }
+
+    private func iconName(for source: AIToolSource) -> String {
+        switch source {
+        case .claude: return "claude_settings_icon"
+        case .codex: return "codex_settings_icon"
+        case .gemini: return "gemini_settings_icon"
+        }
     }
 
     private func installAllHooks() {
@@ -300,10 +372,36 @@ struct PanelSettingsView: View {
         Text(text)
             .font(.system(size: 10, weight: .medium))
             .foregroundColor(color)
+            .lineLimit(1)
+            .truncationMode(.tail)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(color.opacity(0.15))
             .cornerRadius(4)
+    }
+
+    private func usageColor(for percentage: Int) -> Color {
+        switch percentage {
+        case ..<50: return TerminalColors.green
+        case ..<80: return TerminalColors.amber
+        default: return TerminalColors.red
+        }
+    }
+
+    private func formatCompactTokens(_ value: Int) -> String {
+        let number = Double(value)
+        let absNumber = abs(number)
+
+        if absNumber >= 1_000_000_000 {
+            return String(format: "%.1fB", number / 1_000_000_000)
+        }
+        if absNumber >= 1_000_000 {
+            return String(format: "%.1fM", number / 1_000_000)
+        }
+        if absNumber >= 1_000 {
+            return String(format: "%.1fK", number / 1_000)
+        }
+        return "\(value)"
     }
 
     @ViewBuilder
@@ -363,14 +461,25 @@ struct PanelSettingsView: View {
 struct SettingsRowView<Trailing: View>: View {
     let icon: String
     let title: String
+    var iconIsAsset: Bool = false
     @ViewBuilder let trailing: () -> Trailing
 
     var body: some View {
         HStack {
-            Image(systemName: icon)
-                .font(.system(size: 12))
-                .foregroundColor(TerminalColors.secondaryText)
-                .frame(width: 20)
+            Group {
+                if iconIsAsset {
+                    Image(icon)
+                        .resizable()
+                        .interpolation(.none)
+                        .renderingMode(.original)
+                        .frame(width: 14, height: 14)
+                } else {
+                    Image(systemName: icon)
+                        .font(.system(size: 12))
+                        .foregroundColor(TerminalColors.secondaryText)
+                }
+            }
+            .frame(width: 20)
 
             Text(title)
                 .font(.system(size: 12))

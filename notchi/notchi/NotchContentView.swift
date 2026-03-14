@@ -18,6 +18,7 @@ struct NotchContentView: View {
     var stateMachine: NotchiStateMachine = .shared
     var panelManager: NotchPanelManager = .shared
     var usageService: ClaudeUsageService = .shared
+    var localUsageService: LocalUsageService = .shared
     @State private var showingPanelSettings = false
     @State private var showingSessionActivity = false
     @State private var isMuted = AppSettings.isMuted
@@ -148,6 +149,7 @@ struct NotchContentView: View {
                 ExpandedPanelView(
                     sessionStore: sessionStore,
                     usageService: usageService,
+                    localUsageService: localUsageService,
                     showingSettings: $showingPanelSettings,
                     showingSessionActivity: $showingSessionActivity,
                     isActivityCollapsed: $isActivityCollapsed
