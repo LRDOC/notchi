@@ -6,7 +6,7 @@ enum NotchConstants {
     static let notchVisualClearance: CGFloat = 36
     static let grassVisibleFraction: CGFloat = 0.4
     static let collapseToggleBottomGap: CGFloat = 52
-    static let collapsedPanelHeight: CGFloat = 180
+    static let collapsedPanelHeight: CGFloat = 210
 }
 
 extension Notification.Name {

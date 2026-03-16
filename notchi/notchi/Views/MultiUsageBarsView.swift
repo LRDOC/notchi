@@ -32,7 +32,7 @@ struct MultiUsageBarsView: View {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
                     }
-                    .padding(.top, 4)
+                    .padding(.top, 10)
             } else {
                 rows.padding(.top, 5)
             }
