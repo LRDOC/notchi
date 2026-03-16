@@ -3,7 +3,7 @@ import SwiftUI
 enum NotchConstants {
     static let expandedPanelSize = CGSize(width: 450, height: 450)
     static let expandedPanelHorizontalPadding: CGFloat = 19 * 2
-    static let notchVisualClearance: CGFloat = 18
+    static let notchVisualClearance: CGFloat = 28
 }
 
 extension Notification.Name {
