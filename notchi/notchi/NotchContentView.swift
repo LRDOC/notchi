@@ -3,6 +3,7 @@ import SwiftUI
 enum NotchConstants {
     static let expandedPanelSize = CGSize(width: 450, height: 450)
     static let expandedPanelHorizontalPadding: CGFloat = 19 * 2
+    static let notchVisualClearance: CGFloat = 18
 }
 
 extension Notification.Name {
@@ -53,7 +54,7 @@ struct NotchContentView: View {
     private var grassHeight: CGFloat {
         // Keep the visual ratio in expanded mode, but shrink the grass layer
         // when the activity panel is collapsed so usage rows remain readable.
-        return expandedPanelHeight * 0.3 + notchSize.height
+        return expandedPanelHeight * 0.3 + notchSize.height + NotchConstants.notchVisualClearance
     }
 
     private var shouldShowBackButton: Bool {
@@ -153,7 +154,8 @@ struct NotchContentView: View {
                     localUsageService: localUsageService,
                     showingSettings: $showingPanelSettings,
                     showingSessionActivity: $showingSessionActivity,
-                    isActivityCollapsed: $isActivityCollapsed
+                    isActivityCollapsed: $isActivityCollapsed,
+                    topVisualClearance: NotchConstants.notchVisualClearance
                 )
                 .frame(
                     width: isExpanded ? (NotchConstants.expandedPanelSize.width - 48) : 0,

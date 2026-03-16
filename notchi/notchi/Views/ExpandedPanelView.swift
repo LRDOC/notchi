@@ -26,6 +26,7 @@ struct ExpandedPanelView: View {
     @Binding var showingSettings: Bool
     @Binding var showingSessionActivity: Bool
     @Binding var isActivityCollapsed: Bool
+    let topVisualClearance: CGFloat
 
     private var effectiveSession: SessionData? {
         sessionStore.effectiveSession
@@ -112,7 +113,7 @@ struct ExpandedPanelView: View {
                     .allowsHitTesting(false)
             } else {
                 Spacer()
-                    .frame(height: geometry.size.height * 0.3)
+                    .frame(height: geometry.size.height * 0.3 + topVisualClearance)
                     .allowsHitTesting(false)
             }
 
@@ -151,7 +152,7 @@ struct ExpandedPanelView: View {
                     .allowsHitTesting(false)
             } else {
                 Spacer()
-                    .frame(height: geometry.size.height * 0.3)
+                    .frame(height: geometry.size.height * 0.3 + topVisualClearance)
                     .allowsHitTesting(false)
             }
 
