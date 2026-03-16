@@ -81,12 +81,11 @@ struct MultiUsageBarsView: View {
 
         let statusText: String
         if let usage = codexUsage {
-            if let reset = usage.formattedResetTime, let p = usage.effectivePercentage {
-                statusText = "Reset \(reset) • \(p)%"
-            } else if let p = usage.effectivePercentage {
-                statusText = "\(p)% • \(formatTokens(usage.totalTokens)) tok"
+            let resetText = usage.formattedResetTime ?? "n/a"
+            if let p = usage.effectivePercentage {
+                statusText = "Reset \(resetText) • \(p)%"
             } else {
-                statusText = "\(formatTokens(usage.totalTokens)) tok"
+                statusText = "Reset \(resetText)"
             }
         } else if localLoading {
             statusText = "Loading..."
@@ -110,14 +109,8 @@ struct MultiUsageBarsView: View {
         let statusText: String
         if let usage = geminiUsage {
             let contextPercent = Int((value * 100).rounded())
-            var parts = [
-                "I \(formatCompactTokens(usage.inputTokens))",
-                "O \(formatCompactTokens(usage.outputTokens))"
-            ]
-            if usage.cachedTokens > 0 {
-                parts.append("C \(formatCompactTokens(usage.cachedTokens))")
-            }
-            statusText = "~\(contextPercent)% ctx • " + parts.joined(separator: " • ")
+            let contextTotal = usage.inputTokens + usage.outputTokens
+            statusText = "Reset n/a • ~\(contextPercent)% ctx • \(formatCompactTokens(contextTotal)) tok"
         } else if localLoading {
             statusText = "Loading..."
         } else {
