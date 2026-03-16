@@ -139,7 +139,6 @@ struct ExpandedPanelView: View {
                 usageFooter(compact: false)
             }
             .padding(.horizontal, 12)
-            .background(Color.black.opacity(0.24))
         }
         .padding(.bottom, 5)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -177,7 +176,6 @@ struct ExpandedPanelView: View {
                 usageFooter(compact: isActivityCollapsed)
             }
             .padding(.horizontal, 12)
-            .background(Color.black.opacity(0.24))
         }
         .padding(.bottom, 5)
         .frame(maxWidth: .infinity, alignment: .topLeading)

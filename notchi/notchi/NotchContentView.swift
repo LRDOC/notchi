@@ -5,6 +5,7 @@ enum NotchConstants {
     static let expandedPanelHorizontalPadding: CGFloat = 19 * 2
     static let notchVisualClearance: CGFloat = 36
     static let grassVisibleFraction: CGFloat = 0.4
+    static let collapseToggleBottomGap: CGFloat = 52
 }
 
 extension Notification.Name {
@@ -113,7 +114,7 @@ struct NotchContentView: View {
                         .padding(8)
                 }
                 .buttonStyle(.plain)
-                .offset(y: grassHeight - 30)
+                .offset(y: max(0, grassHeight - NotchConstants.collapseToggleBottomGap))
                 .padding(.trailing, 30)
             }
         }
