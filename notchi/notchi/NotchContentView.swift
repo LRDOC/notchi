@@ -6,6 +6,7 @@ enum NotchConstants {
     static let notchVisualClearance: CGFloat = 36
     static let grassVisibleFraction: CGFloat = 0.4
     static let collapseToggleBottomGap: CGFloat = 52
+    static let collapsedPanelHeight: CGFloat = 180
 }
 
 extension Notification.Name {
@@ -68,8 +69,7 @@ struct NotchContentView: View {
 
     private var expandedPanelHeight: CGFloat {
         let fullHeight = NotchConstants.expandedPanelSize.height - notchSize.height - 24
-        let collapsedHeight: CGFloat = 155
-        return isActivityCollapsed ? collapsedHeight : fullHeight
+        return isActivityCollapsed ? NotchConstants.collapsedPanelHeight : fullHeight
     }
 
     var body: some View {
