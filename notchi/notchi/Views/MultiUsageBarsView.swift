@@ -13,12 +13,30 @@ struct MultiUsageBarsView: View {
     var onClaudeRetry: (() -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        let rows = VStack(alignment: .leading, spacing: 7) {
             claudeRow
             codexRow
             geminiRow
         }
-        .padding(.top, compact ? 0 : 5)
+
+        Group {
+            if compact {
+                rows
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 7)
+                    .background {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.black.opacity(0.42))
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                    }
+                    .padding(.top, 4)
+            } else {
+                rows.padding(.top, 5)
+            }
+        }
     }
 
     private var claudeRow: some View {

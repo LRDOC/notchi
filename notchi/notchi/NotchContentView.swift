@@ -51,7 +51,8 @@ struct NotchContentView: View {
     }
 
     private var grassHeight: CGFloat {
-        let expandedPanelHeight = NotchConstants.expandedPanelSize.height - notchSize.height - 24
+        // Keep the visual ratio in expanded mode, but shrink the grass layer
+        // when the activity panel is collapsed so usage rows remain readable.
         return expandedPanelHeight * 0.3 + notchSize.height
     }
 
