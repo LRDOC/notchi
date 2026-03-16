@@ -113,7 +113,7 @@ struct ExpandedPanelView: View {
                     .allowsHitTesting(false)
             } else {
                 Spacer()
-                    .frame(height: geometry.size.height * 0.3 + topVisualClearance)
+                    .frame(height: geometry.size.height * 0.4 + topVisualClearance)
                     .allowsHitTesting(false)
             }
 
@@ -139,6 +139,7 @@ struct ExpandedPanelView: View {
                 usageFooter(compact: false)
             }
             .padding(.horizontal, 12)
+            .background(Color.black.opacity(0.24))
         }
         .padding(.bottom, 5)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -152,7 +153,7 @@ struct ExpandedPanelView: View {
                     .allowsHitTesting(false)
             } else {
                 Spacer()
-                    .frame(height: geometry.size.height * 0.3 + topVisualClearance)
+                    .frame(height: geometry.size.height * 0.4 + topVisualClearance)
                     .allowsHitTesting(false)
             }
 
@@ -176,6 +177,7 @@ struct ExpandedPanelView: View {
                 usageFooter(compact: isActivityCollapsed)
             }
             .padding(.horizontal, 12)
+            .background(Color.black.opacity(0.24))
         }
         .padding(.bottom, 5)
         .frame(maxWidth: .infinity, alignment: .topLeading)

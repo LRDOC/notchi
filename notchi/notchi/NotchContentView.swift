@@ -4,6 +4,7 @@ enum NotchConstants {
     static let expandedPanelSize = CGSize(width: 450, height: 450)
     static let expandedPanelHorizontalPadding: CGFloat = 19 * 2
     static let notchVisualClearance: CGFloat = 36
+    static let grassVisibleFraction: CGFloat = 0.4
 }
 
 extension Notification.Name {
@@ -54,7 +55,9 @@ struct NotchContentView: View {
     private var grassHeight: CGFloat {
         // Keep the visual ratio in expanded mode, but shrink the grass layer
         // when the activity panel is collapsed so usage rows remain readable.
-        return expandedPanelHeight * 0.3 + notchSize.height + NotchConstants.notchVisualClearance
+        return expandedPanelHeight * NotchConstants.grassVisibleFraction
+            + notchSize.height
+            + NotchConstants.notchVisualClearance
     }
 
     private var shouldShowBackButton: Bool {
