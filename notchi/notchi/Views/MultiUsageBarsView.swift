@@ -26,7 +26,7 @@ struct MultiUsageBarsView: View {
                     .padding(.vertical, 7)
                     .background {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.black.opacity(0.42))
+                            .fill(Color.black)
                     }
                     .overlay {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)

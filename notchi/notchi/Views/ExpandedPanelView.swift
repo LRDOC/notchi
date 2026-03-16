@@ -170,7 +170,10 @@ struct ExpandedPanelView: View {
                 }
 
                 if showIndicator && !isActivityCollapsed {
-                    WorkingIndicatorView(state: state)
+                    WorkingIndicatorView(
+                        state: state,
+                        source: effectiveSession?.source
+                    )
                 }
 
                 usageFooter(compact: isActivityCollapsed)

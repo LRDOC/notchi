@@ -205,12 +205,10 @@ struct QuestionPromptView: View {
 
 struct WorkingIndicatorView: View {
     let state: NotchiState
+    let source: AIToolSource?
     @State private var dotCount = 1
-    @State private var symbolPhase = 0
 
-    private let symbols = ["·", "✢", "✳", "∗", "✻", "✽"]
     private let dotsTimer = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
-    private let symbolTimer = Timer.publish(every: 0.15, on: .main, in: .common).autoconnect()
 
     private var dots: String {
         String(repeating: ".", count: dotCount)
@@ -220,26 +218,25 @@ struct WorkingIndicatorView: View {
         switch state.task {
         case .compacting: return "Compacting"
         case .waiting:    return "Waiting"
-        default:          return "Clanking"
+        default:          return "Working"
         }
     }
 
+    private var indicatorColor: Color {
+        source?.badgeColor ?? TerminalColors.secondaryText
+    }
+
     var body: some View {
-        HStack(spacing: 3) {
-            Text(symbols[symbolPhase])
-                .font(.system(size: 14, weight: .bold))
-                .foregroundColor(TerminalColors.claudeOrange)
-                .frame(width: 14, alignment: .center)
+        HStack(spacing: 5) {
+            Circle()
+                .fill(indicatorColor)
+                .frame(width: 5, height: 5)
             Text("\(statusText)\(dots)")
-                .font(.system(size: 12, weight: .medium).italic())
-                .foregroundColor(TerminalColors.claudeOrange)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(TerminalColors.secondaryText)
         }
-        .padding(.leading, -1)
         .onReceive(dotsTimer) { _ in
             dotCount = (dotCount % 3) + 1
-        }
-        .onReceive(symbolTimer) { _ in
-            symbolPhase = (symbolPhase + 1) % symbols.count
         }
     }
 }
