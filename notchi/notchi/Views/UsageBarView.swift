@@ -53,29 +53,23 @@ struct UsageBarView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 if let error, usage == nil {
-                    Button(action: { onRetry?() }) {
-                        HStack(spacing: 4) {
-                            Text(error)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(TerminalColors.dimmedText)
-                            Text("(tap to retry)")
-                                .font(.system(size: 10))
-                                .foregroundColor(TerminalColors.dimmedText)
-                        }
+                    HStack(spacing: 4) {
+                        Text(error)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(TerminalColors.dimmedText)
+                        Text("(tap to retry)")
+                            .font(.system(size: 10))
+                            .foregroundColor(TerminalColors.dimmedText)
                     }
-                    .buttonStyle(.plain)
                 } else if let usage, let resetTime = usage.formattedResetTime {
                     HStack(spacing: 4) {
                         Text("Resets in \(resetTime)")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(TerminalColors.secondaryText)
                         if isStale {
-                            Button(action: { onConnect?() }) {
-                                Text("(tap to reconnect)")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(TerminalColors.dimmedText)
-                            }
-                            .buttonStyle(.plain)
+                            Text("(tap to reconnect)")
+                                .font(.system(size: 10))
+                                .foregroundColor(TerminalColors.dimmedText)
                         }
                     }
                 } else {
@@ -95,6 +89,14 @@ struct UsageBarView: View {
             }
 
             progressBar
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if error != nil, usage == nil {
+                onRetry?()
+            } else if isStale {
+                onConnect?()
+            }
         }
         .padding(.top, compact ? 0 : 5)
     }
