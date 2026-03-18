@@ -240,6 +240,26 @@ final class ClaudeUsageService {
         case enterprise403
     }
 
+    private enum OAuth403Classification {
+        case authScopeFailure(rawMessage: String, errorType: String?, requestID: String?)
+        case enterpriseFallback(errorType: String?, requestID: String?)
+    }
+
+    private struct AnthropicErrorEnvelope: Decodable {
+        let error: AnthropicErrorDetail?
+        let requestID: String?
+
+        enum CodingKeys: String, CodingKey {
+            case error
+            case requestID = "request_id"
+        }
+    }
+
+    private struct AnthropicErrorDetail: Decodable {
+        let type: String?
+        let message: String?
+    }
+
     // Internal for unit tests that verify service state transitions directly.
     func performFetch(with accessToken: String, userInitiated: Bool = false) async {
         if userInitiated { isLoading = true }
@@ -329,8 +349,7 @@ final class ClaudeUsageService {
                 }
 
                 if httpResponse.statusCode == 403 {
-                    logger.info("OAuth returned 403 — enterprise account, trying headers fallback")
-                    return .enterprise403
+                    return handleOAuthForbidden(data: data, response: httpResponse)
                 }
 
                 if httpResponse.statusCode == 401 {
@@ -455,6 +474,64 @@ final class ClaudeUsageService {
 
         presentReconnectRequired("Token expired")
         stopPolling()
+    }
+
+    private func handleOAuthForbidden(data: Data, response: HTTPURLResponse) -> FetchResult {
+        let classification = classifyOAuth403(data: data, response: response)
+
+        switch classification {
+        case let .authScopeFailure(rawMessage, errorType, requestID):
+            let errorTypeLog = errorType ?? "unknown"
+            let requestIDLog = requestID ?? "none"
+            logger.warning(
+                "OAuth 403 requires reconnect - errorType: \(errorTypeLog, privacy: .public), requestID: \(requestIDLog, privacy: .public), message: \(rawMessage, privacy: .public)"
+            )
+            presentReconnectRequired("Claude OAuth permissions missing. Reconnect Claude Code.")
+            stopPolling()
+            return .handled
+
+        case let .enterpriseFallback(errorType, requestID):
+            let errorTypeLog = errorType ?? "unknown"
+            let requestIDLog = requestID ?? "none"
+            logger.info(
+                "OAuth 403 trying headers fallback - errorType: \(errorTypeLog, privacy: .public), requestID: \(requestIDLog, privacy: .public)"
+            )
+            return .enterprise403
+        }
+    }
+
+    private func classifyOAuth403(data: Data, response: HTTPURLResponse) -> OAuth403Classification {
+        guard !data.isEmpty,
+              let envelope = try? JSONDecoder().decode(AnthropicErrorEnvelope.self, from: data) else {
+            return .enterpriseFallback(
+                errorType: nil,
+                requestID: response.value(forHTTPHeaderField: "request-id")
+            )
+        }
+
+        let errorType = envelope.error?.type?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = envelope.error?.message?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestID = envelope.requestID ?? response.value(forHTTPHeaderField: "request-id")
+
+        guard errorType == "permission_error",
+              let message,
+              isExplicitOAuthScopeFailure(message: message) else {
+            return .enterpriseFallback(errorType: errorType, requestID: requestID)
+        }
+
+        return .authScopeFailure(
+            rawMessage: message,
+            errorType: errorType,
+            requestID: requestID
+        )
+    }
+
+    private func isExplicitOAuthScopeFailure(message: String) -> Bool {
+        let normalized = message.lowercased()
+        return normalized.contains("user:profile")
+            || normalized.contains("missing scope")
+            || normalized.contains("scope requirement")
+            || (normalized.contains("oauth") && normalized.contains("scope"))
     }
 
     private func parseHeaderUtilization(from response: HTTPURLResponse) -> Double? {

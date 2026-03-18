@@ -365,6 +365,62 @@ final class ClaudeUsageServiceTests: XCTestCase {
 
     // MARK: - Enterprise Headers Fallback
 
+    func testOAuth403WithExplicitScopeErrorDoesNotFallbackToHeaders() async throws {
+        let scheduler = PollSchedulerSpy()
+        var requestURLs: [String] = []
+        let dependencies = makeDependencies(
+            scheduler: scheduler,
+            resolveUserAgent: { "claude-code/2.1.77" },
+            fetchUsage: { request in
+                let path = request.url?.path ?? ""
+                requestURLs.append(path)
+                return (
+                    self.makeAnthropicErrorPayload(
+                        type: "permission_error",
+                        message: "Claude OAuth token does not meet scope requirement 'user:profile'."
+                    ),
+                    self.makeResponse(statusCode: 403)
+                )
+            }
+        )
+
+        let service = ClaudeUsageService(dependencies: dependencies)
+        await service.performFetch(with: "token")
+
+        XCTAssertEqual(requestURLs, ["/api/oauth/usage"])
+        XCTAssertEqual(service.error, "Claude OAuth permissions missing. Reconnect Claude Code.")
+        XCTAssertEqual(service.recoveryAction, .reconnect)
+        XCTAssertFalse(service.isConnected)
+        XCTAssertTrue(scheduler.intervals.isEmpty)
+    }
+
+    func testOAuth403WithGenericOAuthScopeErrorDoesNotFallbackToHeaders() async throws {
+        let scheduler = PollSchedulerSpy()
+        var requestURLs: [String] = []
+        let dependencies = makeDependencies(
+            scheduler: scheduler,
+            resolveUserAgent: { "claude-code/2.1.77" },
+            fetchUsage: { request in
+                let path = request.url?.path ?? ""
+                requestURLs.append(path)
+                return (
+                    self.makeAnthropicErrorPayload(
+                        type: "permission_error",
+                        message: "OAuth token scope is invalid"
+                    ),
+                    self.makeResponse(statusCode: 403)
+                )
+            }
+        )
+
+        let service = ClaudeUsageService(dependencies: dependencies)
+        await service.performFetch(with: "token")
+
+        XCTAssertEqual(requestURLs, ["/api/oauth/usage"])
+        XCTAssertEqual(service.error, "Claude OAuth permissions missing. Reconnect Claude Code.")
+        XCTAssertEqual(service.recoveryAction, .reconnect)
+    }
+
     func testOAuth403TriggersHeadersFallbackAndSucceeds() async throws {
         let scheduler = PollSchedulerSpy()
         var requestURLs: [String] = []
@@ -394,6 +450,99 @@ final class ClaudeUsageServiceTests: XCTestCase {
         XCTAssertNil(service.statusMessage)
         XCTAssertEqual(service.recoveryAction, .none)
         XCTAssertEqual(scheduler.intervals, [60])
+    }
+
+    func testOAuth403WithAmbiguousJSONStillFallsBackToHeaders() async throws {
+        let scheduler = PollSchedulerSpy()
+        var requestURLs: [String] = []
+        let dependencies = makeDependencies(
+            scheduler: scheduler,
+            resolveUserAgent: { "claude-code/2.1.77" },
+            fetchUsage: { request in
+                let path = request.url?.path ?? ""
+                requestURLs.append(path)
+                if path == "/api/oauth/usage" {
+                    return (
+                        self.makeAnthropicErrorPayload(
+                            type: "permission_error",
+                            message: "Your account does not have permission to use this resource."
+                        ),
+                        self.makeResponse(statusCode: 403)
+                    )
+                }
+                return (Data(), self.makeHeadersResponse(
+                    utilization: "0.42",
+                    reset: "2099-01-01T01:00:00Z"
+                ))
+            }
+        )
+
+        let service = ClaudeUsageService(dependencies: dependencies)
+        await service.performFetch(with: "token")
+
+        XCTAssertEqual(requestURLs, ["/api/oauth/usage", "/v1/messages"])
+        XCTAssertEqual(service.currentUsage?.usagePercentage, 42)
+        XCTAssertEqual(service.recoveryAction, .none)
+    }
+
+    func testOAuth403WithNonPermissionErrorAndScopeTextStillFallsBackToHeaders() async throws {
+        let scheduler = PollSchedulerSpy()
+        var requestURLs: [String] = []
+        let dependencies = makeDependencies(
+            scheduler: scheduler,
+            resolveUserAgent: { "claude-code/2.1.77" },
+            fetchUsage: { request in
+                let path = request.url?.path ?? ""
+                requestURLs.append(path)
+                if path == "/api/oauth/usage" {
+                    return (
+                        self.makeAnthropicErrorPayload(
+                            type: "invalid_request_error",
+                            message: "OAuth token scope is invalid"
+                        ),
+                        self.makeResponse(statusCode: 403)
+                    )
+                }
+                return (Data(), self.makeHeadersResponse(
+                    utilization: "0.42",
+                    reset: "2099-01-01T01:00:00Z"
+                ))
+            }
+        )
+
+        let service = ClaudeUsageService(dependencies: dependencies)
+        await service.performFetch(with: "token")
+
+        XCTAssertEqual(requestURLs, ["/api/oauth/usage", "/v1/messages"])
+        XCTAssertEqual(service.currentUsage?.usagePercentage, 42)
+        XCTAssertEqual(service.recoveryAction, .none)
+    }
+
+    func testOAuth403WithEmptyBodyStillFallsBackToHeaders() async throws {
+        let scheduler = PollSchedulerSpy()
+        var requestURLs: [String] = []
+        let dependencies = makeDependencies(
+            scheduler: scheduler,
+            resolveUserAgent: { "claude-code/2.1.77" },
+            fetchUsage: { request in
+                let path = request.url?.path ?? ""
+                requestURLs.append(path)
+                if path == "/api/oauth/usage" {
+                    return (Data(), self.makeResponse(statusCode: 403))
+                }
+                return (Data(), self.makeHeadersResponse(
+                    utilization: "0.42",
+                    reset: "2099-01-01T01:00:00Z"
+                ))
+            }
+        )
+
+        let service = ClaudeUsageService(dependencies: dependencies)
+        await service.performFetch(with: "token")
+
+        XCTAssertEqual(requestURLs, ["/api/oauth/usage", "/v1/messages"])
+        XCTAssertEqual(service.currentUsage?.usagePercentage, 42)
+        XCTAssertEqual(service.recoveryAction, .none)
     }
 
     func testOAuth403ThenHeadersFallbackFailsWithNoHeaders() async throws {
@@ -725,5 +874,21 @@ final class ClaudeUsageServiceTests: XCTestCase {
             httpVersion: nil,
             headerFields: headers
         )!
+    }
+
+    private func makeAnthropicErrorPayload(
+        type: String,
+        message: String,
+        requestID: String = "req_test_123"
+    ) -> Data {
+        let payload: [String: Any] = [
+            "type": "error",
+            "error": [
+                "type": type,
+                "message": message,
+            ],
+            "request_id": requestID,
+        ]
+        return try! JSONSerialization.data(withJSONObject: payload)
     }
 }
