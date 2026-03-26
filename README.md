@@ -1,6 +1,8 @@
 # Notchi
 
 A macOS notch companion that reacts to Claude Code, Gemini CLI, and Codex CLI activity in real-time.
+> [!IMPORTANT]
+> If you're currently on Notchi `1.0.0`, please install `1.0.1` or later manually from the DMG [here](https://github.com/LRDOC/notchi/releases/latest). The in-app updater in `1.0.0` is broken for that first upgrade, but should work thereafter.
 
 https://github.com/user-attachments/assets/e417bd40-cae8-47c0-998a-905166cf3513
 
@@ -123,6 +125,10 @@ Notes:
 ## Contributing
 
 If you have any bugs, ideas, or would like to contribute through pull requests, please check out [Contributing to Notchi](CONTRIBUTING.md).
+
+## Community Ports
+
+- [notchi-for-windows](https://github.com/AptatoX/notchi-for-windows) by [@AptatoX](https://github.com/AptatoX), a community-made Windows port of Notchi
 
 ## Credits
 

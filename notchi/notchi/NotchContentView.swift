@@ -23,6 +23,7 @@ struct NotchContentView: View {
     var panelManager: NotchPanelManager = .shared
     var usageService: ClaudeUsageService = .shared
     var localUsageService: LocalUsageService = .shared
+    @ObservedObject private var updateManager = UpdateManager.shared
     @State private var showingPanelSettings = false
     @State private var showingSessionActivity = false
     @State private var isMuted = AppSettings.isMuted
@@ -52,6 +53,17 @@ struct NotchContentView: View {
 
     private var bottomCornerRadius: CGFloat {
         isExpanded ? cornerRadiusInsets.opened.bottom : cornerRadiusInsets.closed.bottom
+    }
+
+    /// Uses the system notch curve in collapsed mode when available.
+    private var notchClipShape: AnyShape {
+        if !isExpanded, let systemPath = panelManager.systemNotchPath {
+            return AnyShape(SystemNotchShape(cgPath: systemPath))
+        }
+        return AnyShape(NotchShape(
+            topCornerRadius: topCornerRadius,
+            bottomCornerRadius: bottomCornerRadius
+        ))
     }
 
     private var grassHeight: CGFloat {
@@ -118,10 +130,7 @@ struct NotchContentView: View {
                 .padding(.trailing, 30)
             }
         }
-        .clipShape(NotchShape(
-            topCornerRadius: topCornerRadius,
-            bottomCornerRadius: bottomCornerRadius
-        ))
+        .clipShape(notchClipShape)
         .shadow(
             color: isExpanded ? .black.opacity(0.7) : .clear,
             radius: 6
@@ -202,7 +211,11 @@ struct NotchContentView: View {
 
     private var headerButtons: some View {
         HStack(spacing: 8) {
-            PanelHeaderButton(sfSymbol: "gearshape", action: { showingPanelSettings = true })
+            PanelHeaderButton(
+                sfSymbol: "gearshape",
+                showsIndicator: updateManager.hasPendingUpdate,
+                action: { showingPanelSettings = true }
+            )
             PanelHeaderButton(sfSymbol: "xmark", action: { panelManager.collapse() })
         }
         .padding(.trailing, 8)
@@ -251,10 +264,6 @@ struct NotchContentView: View {
             state: topSession?.state ?? .idle,
             isSelected: true
         )
-    }
-
-    private func openSettings() {
-        showingPanelSettings = true
     }
 
     private func toggleMute() {

@@ -58,6 +58,68 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
+      - name: Validate project version
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          BUILD_SETTINGS=$(xcodebuild -showBuildSettings \
+            -project notchi/notchi.xcodeproj \
+            -scheme notchi \
+            2>/dev/null)
+          MARKETING_VERSION=$(printf '%s\n' "$BUILD_SETTINGS" | awk -F' = ' '/MARKETING_VERSION/ { print $2; exit }')
+          BUILD_VERSION=$(printf '%s\n' "$BUILD_SETTINGS" | awk -F' = ' '/CURRENT_PROJECT_VERSION/ { print $2; exit }')
+          LAST_PUBLISHED_BUILD=$(grep -oE '<sparkle:version>[0-9]+' docs/appcast.xml 2>/dev/null | sed 's#<sparkle:version>##' | head -1 || true)
+
+          if [ -z "$MARKETING_VERSION" ]; then
+            echo "Failed to determine MARKETING_VERSION from Xcode project"
+            exit 1
+          fi
+
+          if [ -z "$BUILD_VERSION" ]; then
+            echo "Failed to determine CURRENT_PROJECT_VERSION from Xcode project"
+            exit 1
+          fi
+
+          if [ "$MARKETING_VERSION" != "$VERSION" ]; then
+            echo "Tag version v$VERSION does not match project MARKETING_VERSION $MARKETING_VERSION"
+            exit 1
+          fi
+
+          if ! [[ "$BUILD_VERSION" =~ ^[0-9]+$ ]]; then
+            echo "CURRENT_PROJECT_VERSION must be numeric, got: $BUILD_VERSION"
+            exit 1
+          fi
+
+          if [ -n "$LAST_PUBLISHED_BUILD" ]; then
+            if ! [[ "$LAST_PUBLISHED_BUILD" =~ ^[0-9]+$ ]]; then
+              echo "Latest published sparkle:version must be numeric, got: $LAST_PUBLISHED_BUILD"
+              exit 1
+            fi
+
+            if [ "$BUILD_VERSION" -le "$LAST_PUBLISHED_BUILD" ]; then
+              echo "CURRENT_PROJECT_VERSION $BUILD_VERSION must be greater than latest published sparkle:version $LAST_PUBLISHED_BUILD"
+              exit 1
+            fi
+
+            echo "Validated project version $MARKETING_VERSION (build $BUILD_VERSION) against published build $LAST_PUBLISHED_BUILD"
+          else
+            echo "Validated project version $MARKETING_VERSION (build $BUILD_VERSION) in bootstrap mode with no published appcast item"
+          fi
+
+      - name: Prepare release notes asset
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          RELEASE_NOTES_SOURCE="docs/release-notes/$VERSION.md"
+          RELEASE_NOTES_ASSET="$RUNNER_TEMP/Notchi-$VERSION.md"
+
+          if [ ! -f "$RELEASE_NOTES_SOURCE" ]; then
+            echo "Missing release notes file: $RELEASE_NOTES_SOURCE"
+            exit 1
+          fi
+
+          cp "$RELEASE_NOTES_SOURCE" "$RELEASE_NOTES_ASSET"
+
       - name: Install Apple certificate
         env:
           APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
@@ -163,6 +225,20 @@ jobs:
           hdiutil create -volname "Notchi" -srcfolder "$DMG_DIR" \
             -ov -format UDZO "$RUNNER_TEMP/Notchi-$VERSION.dmg"
 
+      - name: Write DMG checksum
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          SHASUM=$(shasum -a 256 "$RUNNER_TEMP/Notchi-$VERSION.dmg" | awk '{print $1}')
+          printf '%s\n' "$SHASUM" > "$RUNNER_TEMP/Notchi-$VERSION.sha256"
+
+          {
+            echo "## Release checksum"
+            echo
+            echo "\`Notchi-$VERSION.dmg\` SHA-256:"
+            echo "\`$SHASUM\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Write Sparkle key to temp file
         env:
           SPARKLE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
@@ -186,13 +262,19 @@ jobs:
         run: |
           mkdir -p $RUNNER_TEMP/appcast_staging
           cp "$RUNNER_TEMP/Notchi-$VERSION.dmg" $RUNNER_TEMP/appcast_staging/
+          cp "$RUNNER_TEMP/Notchi-$VERSION.md" $RUNNER_TEMP/appcast_staging/
           cp docs/appcast.xml $RUNNER_TEMP/appcast_staging/ 2>/dev/null || true
 
           "$SPARKLE_BIN_DIR/generate_appcast" \
             --ed-key-file "$RUNNER_TEMP/sparkle_key" \
             --download-url-prefix "https://github.com/$REPOSITORY/releases/download/v$VERSION/" \
+            --release-notes-url-prefix "https://github.com/$REPOSITORY/releases/download/v$VERSION/" \
             -o docs/appcast.xml \
             $RUNNER_TEMP/appcast_staging
+
+          mkdir -p website/release-notes-signed
+          cp "$RUNNER_TEMP/appcast_staging/Notchi-$VERSION.md" \
+            "website/release-notes-signed/Notchi-$VERSION.md"
 
       - name: Cleanup Sparkle key
         if: always()
@@ -201,8 +283,11 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ runner.temp }}/Notchi-${{ steps.version.outputs.VERSION }}.dmg
-          generate_release_notes: true
+          files: |
+            ${{ runner.temp }}/Notchi-${{ steps.version.outputs.VERSION }}.dmg
+            ${{ runner.temp }}/Notchi-${{ steps.version.outputs.VERSION }}.sha256
+            ${{ runner.temp }}/Notchi-${{ steps.version.outputs.VERSION }}.md
+          body_path: ${{ runner.temp }}/Notchi-${{ steps.version.outputs.VERSION }}.md
 
       - name: Commit updated appcast
         env:
@@ -216,6 +301,6 @@ jobs:
           git pull origin main
           cp /tmp/appcast.xml docs/appcast.xml
           cp /tmp/appcast.xml website/public/appcast.xml
-          git add docs/appcast.xml website/public/appcast.xml
+          git add docs/appcast.xml website/public/appcast.xml website/release-notes-signed/Notchi-$VERSION.md
           git diff --cached --quiet && echo "No appcast changes" || git commit -m "chore: update appcast for v$VERSION"
           git push origin main

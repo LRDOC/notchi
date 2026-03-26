@@ -6,39 +6,21 @@ enum UpdateState: Equatable {
     case idle
     case checking
     case upToDate
-    case found(version: String, releaseNotes: String?)
+    case updateAvailable(version: String)
     case downloading(progress: Double)
-    case extracting(progress: Double)
     case readyToInstall(version: String)
-    case installing
     case error(message: String)
-
-    var isActive: Bool {
-        switch self {
-        case .idle, .upToDate, .error:
-            return false
-        default:
-            return true
-        }
-    }
 }
 
-/// Observable update manager that bridges Sparkle to SwiftUI.
-/// Called by NotchUserDriver to relay Sparkle lifecycle events,
-/// and by the UI to trigger user-initiated actions.
-class UpdateManager: NSObject, ObservableObject {
+/// Observable update manager that mirrors Sparkle state into SwiftUI.
+/// The real install/relaunch flow is handled by Sparkle's standard UI.
+@MainActor
+final class UpdateManager: ObservableObject {
     static let shared = UpdateManager()
 
     @Published var state: UpdateState = .idle
-    @Published var hasUnseenUpdate: Bool = false
-    private var hasSeenUpdateThisSession: Bool = false
+    @Published var hasPendingUpdate: Bool = false
 
-    private var downloadedBytes: Int64 = 0
-    private var expectedBytes: Int64 = 0
-    private var currentVersion: String = ""
-
-    private var installHandler: ((SPUUserUpdateChoice) -> Void)?
-    private var cancellationHandler: (() -> Void)?
     private var resetTask: Task<Void, Never>?
 
     private var updater: SPUUpdater?
@@ -51,118 +33,77 @@ class UpdateManager: NSObject, ObservableObject {
 
     func checkForUpdates() {
         guard let updater, updater.canCheckForUpdates else { return }
+        resetTask?.cancel()
         state = .checking
         updater.checkForUpdates()
     }
 
-    func downloadAndInstall() {
-        installHandler?(.install)
-        installHandler = nil
+    func updateFound(version: String) {
+        hasPendingUpdate = true
+
+        if case .downloading = state {
+            return
+        }
+
+        state = .updateAvailable(version: version)
     }
 
-    func skipUpdate() {
-        installHandler?(.skip)
-        installHandler = nil
-        state = .idle
-        hasUnseenUpdate = false
-    }
-
-    func dismissUpdate() {
-        installHandler?(.dismiss)
-        installHandler = nil
-        state = .idle
-    }
-
-    func cancelDownload() {
-        cancellationHandler?()
-        cancellationHandler = nil
-        state = .idle
-    }
-
-    // MARK: - Internal (called by NotchUserDriver)
-
-    func updateFound(
-        version: String,
-        releaseNotes: String?,
-        installHandler: @escaping (SPUUserUpdateChoice) -> Void
-    ) {
-        currentVersion = version
-        self.installHandler = installHandler
-        state = .found(version: version, releaseNotes: releaseNotes)
-
-        if !hasSeenUpdateThisSession {
-            hasUnseenUpdate = true
+    func userMadeChoice(_ choice: SPUUserUpdateChoice, stage: SPUUserUpdateStage, version: String) {
+        switch choice {
+        case .skip:
+            clearPendingUpdate()
+        case .dismiss:
+            hasPendingUpdate = true
+            state = stage == .notDownloaded
+                ? .updateAvailable(version: version)
+                : .readyToInstall(version: version)
+        case .install:
+            hasPendingUpdate = true
+            if stage == .notDownloaded {
+                state = .downloading(progress: 0)
+            } else {
+                state = .readyToInstall(version: version)
+            }
+        @unknown default:
+            break
         }
     }
 
-    func markUpdateSeen() {
-        hasSeenUpdateThisSession = true
-        hasUnseenUpdate = false
-    }
-
-    func downloadStarted(cancellation: @escaping () -> Void) {
-        downloadedBytes = 0
-        expectedBytes = 0
-        cancellationHandler = cancellation
+    func downloadStarted() {
+        hasPendingUpdate = true
         state = .downloading(progress: 0)
     }
 
-    func downloadExpectedLength(_ length: UInt64) {
-        expectedBytes = Int64(length)
-    }
-
-    func downloadReceivedData(_ length: UInt64) {
-        downloadedBytes += Int64(length)
-        let progress = expectedBytes > 0
-            ? Double(downloadedBytes) / Double(expectedBytes)
-            : 0
-        state = .downloading(progress: min(progress, 1.0))
-    }
-
-    func extractionStarted() {
-        state = .extracting(progress: 0)
-    }
-
-    func extractionProgress(_ progress: Double) {
-        state = .extracting(progress: progress)
-    }
-
-    func readyToInstall(installHandler: @escaping (SPUUserUpdateChoice) -> Void) {
-        self.installHandler = installHandler
-        state = .readyToInstall(version: currentVersion)
-    }
-
-    func installing() {
-        state = .installing
-    }
-
-    func installed(relaunched: Bool) {
-        state = .idle
+    func readyToInstall(version: String) {
+        hasPendingUpdate = true
+        state = .readyToInstall(version: version)
     }
 
     func noUpdateFound() {
+        clearPendingUpdate(showIdleImmediately: false)
         state = .upToDate
-        resetTask?.cancel()
-        resetTask = Task {
-            try? await Task.sleep(for: .seconds(5))
-            guard !Task.isCancelled else { return }
-            if case .upToDate = state {
-                state = .idle
-            }
-        }
     }
 
     func updateError(_ message: String) {
         state = .error(message: message)
     }
 
-    func sparkleDidDismiss() {
-        installHandler?(.dismiss)
-        installHandler = nil
-        cancellationHandler = nil
-        // Sparkle calls dismissUpdateInstallation() right after noUpdateFound(),
-        // which would reset state before the 5-second "up to date" display timer expires.
-        if case .upToDate = state { return }
+    func finishUpdateSession() {
+        if case .checking = state {
+            state = .idle
+        }
+    }
+
+    func clearInlineNoUpdateStatus() {
+        guard case .upToDate = state else { return }
         state = .idle
+    }
+
+    private func clearPendingUpdate(showIdleImmediately: Bool = true) {
+        hasPendingUpdate = false
+
+        if showIdleImmediately {
+            state = .idle
+        }
     }
 }

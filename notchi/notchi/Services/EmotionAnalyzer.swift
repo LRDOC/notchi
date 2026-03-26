@@ -3,6 +3,65 @@ import os.log
 
 private let logger = Logger(subsystem: "com.ruban.notchi", category: "EmotionAnalyzer")
 
+private struct ClaudeSettingsFile: Decodable {
+    let env: [String: String]?
+}
+
+struct ClaudeSettingsConfig {
+    let apiURL: URL
+    let apiKey: String
+    let model: String
+
+    static let defaultBaseURL = "https://api.anthropic.com"
+    static let defaultAPIURL = URL(string: "\(defaultBaseURL)/v1/messages")!
+    static let defaultModel = "claude-haiku-4-5-20251001"
+
+    static func parse(from data: Data) throws -> ClaudeSettingsConfig? {
+        let settings = try JSONDecoder().decode(ClaudeSettingsFile.self, from: data)
+        let env = settings.env ?? [:]
+
+        let baseURL = env["ANTHROPIC_BASE_URL"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedBaseURL = (baseURL?.isEmpty == false) ? baseURL! : defaultBaseURL
+
+        guard let authToken = env["ANTHROPIC_AUTH_TOKEN"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !authToken.isEmpty,
+              let apiURL = buildMessagesURL(from: resolvedBaseURL) else {
+            logger.debug("Claude settings present but missing valid auth token or base URL")
+            return nil
+        }
+
+        let model = env["ANTHROPIC_DEFAULT_HAIKU_MODEL"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return ClaudeSettingsConfig(
+            apiURL: apiURL,
+            apiKey: authToken,
+            model: (model?.isEmpty == false) ? model! : defaultModel
+        )
+    }
+
+    static func buildMessagesURL(from baseURL: String) -> URL? {
+        guard var components = URLComponents(string: baseURL) else {
+            logger.error("Invalid ANTHROPIC_BASE_URL: \(baseURL, privacy: .public)")
+            return nil
+        }
+
+        let normalizedPath = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        switch true {
+        case normalizedPath.isEmpty:
+            components.path = "/v1/messages"
+        case normalizedPath.hasSuffix("/v1/messages") || normalizedPath == "v1/messages":
+            components.path = "/\(normalizedPath)"
+        case normalizedPath.hasSuffix("/v1") || normalizedPath == "v1":
+            components.path = "/\(normalizedPath)/messages"
+        default:
+            components.path = "/\(normalizedPath)/v1/messages"
+        }
+
+        return components.url
+    }
+}
+
 private struct HaikuResponse: Decodable {
     let content: [ContentBlock]
 
@@ -20,8 +79,6 @@ private struct EmotionResponse: Decodable {
 final class EmotionAnalyzer {
     static let shared = EmotionAnalyzer()
 
-    private static let apiURL = URL(string: "https://api.anthropic.com/v1/messages")!
-    private static let model = "claude-haiku-4-5-20251001"
     private static let validEmotions: Set<String> = ["happy", "sad", "neutral"]
 
     private static let systemPrompt = """
@@ -40,13 +97,18 @@ final class EmotionAnalyzer {
     func analyze(_ prompt: String) async -> (emotion: String, intensity: Double) {
         let start = ContinuousClock.now
 
-        guard let apiKey = AppSettings.anthropicApiKey, !apiKey.isEmpty else {
-            logger.info("No Anthropic API key configured, skipping emotion analysis")
+        guard let config = resolveAPIConfig() else {
+            logger.info("No emotion analysis configuration available, using neutral fallback")
             return ("neutral", 0.0)
         }
 
         do {
-            let result = try await callHaiku(prompt: prompt, apiKey: apiKey)
+            let result = try await callHaiku(
+                prompt: prompt,
+                apiURL: config.apiURL,
+                apiKey: config.apiKey,
+                model: config.model
+            )
             let elapsed = ContinuousClock.now - start
             logger.info("Analysis took \(elapsed, privacy: .public)")
             return result
@@ -82,15 +144,51 @@ final class EmotionAnalyzer {
         return cleaned
     }
 
-    private func callHaiku(prompt: String, apiKey: String) async throws -> (emotion: String, intensity: Double) {
-        var request = URLRequest(url: Self.apiURL)
+    private func resolveAPIConfig() -> (apiURL: URL, apiKey: String, model: String)? {
+        guard let apiKey = AppSettings.anthropicApiKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !apiKey.isEmpty else {
+            return loadClaudeSettingsConfig()
+        }
+
+        return (
+            apiURL: ClaudeSettingsConfig.defaultAPIURL,
+            apiKey: apiKey,
+            model: ClaudeSettingsConfig.defaultModel
+        )
+    }
+
+    private func loadClaudeSettingsConfig() -> (apiURL: URL, apiKey: String, model: String)? {
+        let settingsURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/settings.json")
+
+        guard let data = try? Data(contentsOf: settingsURL) else {
+            return nil
+        }
+
+        do {
+            guard let config = try ClaudeSettingsConfig.parse(from: data) else {
+                return nil
+            }
+            return (
+                apiURL: config.apiURL,
+                apiKey: config.apiKey,
+                model: config.model
+            )
+        } catch {
+            logger.error("Failed to parse Claude settings.json: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private func callHaiku(prompt: String, apiURL: URL, apiKey: String, model: String) async throws -> (emotion: String, intensity: Double) {
+        var request = URLRequest(url: apiURL)
         request.httpMethod = "POST"
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.setValue("application/json", forHTTPHeaderField: "content-type")
 
         let body: [String: Any] = [
-            "model": Self.model,
+            "model": model,
             "max_tokens": 50,
             "system": Self.systemPrompt,
             "messages": [

@@ -6,7 +6,7 @@ Thanks for your interest in contributing! This document covers how to report bug
 
 ### I found a bug
 
-Search [existing issues](https://github.com/sk-ruban/notchi/issues) first. If it hasn't been reported, open an issue with steps to reproduce, your macOS version, and any relevant logs.
+Search [existing issues](https://github.com/LRDOC/notchi/issues) first. If it hasn't been reported, open an issue with steps to reproduce, your macOS version, and any relevant logs.
 
 ### I have an idea for a feature
 
@@ -26,7 +26,7 @@ Pull requests without a corresponding issue may be closed or sit indefinitely.
 2. Open `notchi/notchi.xcodeproj` in Xcode
 3. Build and run (`⌘R`)
 
-The app auto-installs Claude Code hooks on launch, so just start a Claude Code session to see it in action.
+The app auto-installs supported CLI hooks on launch, so just start a Claude Code, Gemini CLI, or Codex CLI session to see it in action.
 
 ## Code Style
 
