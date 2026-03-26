@@ -133,7 +133,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         let dependencies = makeDependencies(
             scheduler: scheduler,
             resolveUserAgent: { "claude-code/2.1.77" },
-            getCachedOAuthToken: { "token" },
+            getCachedOAuthToken: { _ in "token" },
             loadRecoverySnapshot: { snapshot },
             now: { now },
             fetchUsage: { _ in
@@ -167,7 +167,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         let dependencies = makeDependencies(
             scheduler: scheduler,
             resolveUserAgent: { "claude-code/2.1.77" },
-            getCachedOAuthToken: { "token" },
+            getCachedOAuthToken: { _ in "token" },
             loadRecoverySnapshot: { snapshot },
             now: { now },
             fetchUsage: { _ in
@@ -202,7 +202,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         let dependencies = makeDependencies(
             scheduler: scheduler,
             resolveUserAgent: { "claude-code/2.1.77" },
-            getCachedOAuthToken: { "token" },
+            getCachedOAuthToken: { _ in "token" },
             loadRecoverySnapshot: { snapshot },
             clearRecoverySnapshot: { clearCalls += 1 },
             now: { now },
@@ -234,7 +234,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         let dependencies = makeDependencies(
             scheduler: scheduler,
             resolveUserAgent: { "claude-code/2.1.77" },
-            getCachedOAuthToken: { "token" },
+            getCachedOAuthToken: { _ in "token" },
             loadRecoverySnapshot: { storedSnapshot },
             saveRecoverySnapshot: { storedSnapshot = $0 },
             clearRecoverySnapshot: { storedSnapshot = nil },
@@ -269,7 +269,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         let dependencies = makeDependencies(
             scheduler: scheduler,
             resolveUserAgent: { "claude-code/2.1.77" },
-            getAccessToken: { "token" },
+            getCachedOAuthToken: { _ in "token" },
             clearRecoverySnapshot: { clearCalls += 1 },
             fetchUsage: { _ in
                 (self.makeSuccessPayload(utilization: 27), self.makeResponse(statusCode: 200))
@@ -629,7 +629,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         let dependencies = makeDependencies(
             scheduler: scheduler,
             resolveUserAgent: { "claude-code/2.1.77" },
-            getCachedOAuthToken: { "token" },
+            getCachedOAuthToken: { _ in "token" },
             now: { now },
             fetchUsage: { request in
                 let path = request.url?.path ?? ""
@@ -689,14 +689,19 @@ final class ClaudeUsageServiceTests: XCTestCase {
         XCTAssertTrue(scheduler.intervals.isEmpty)
     }
 
-    func testConnectAndStartPollingUsesInteractiveTokenLookup() async throws {
+    func testConnectAndStartPollingUsesSilentStoredTokenRecovery() async throws {
         let scheduler = PollSchedulerSpy()
-        var getAccessTokenCalls = 0
+        var getCachedTokenCalls: [Bool] = []
+        var getOAuthCredentialCalls: [Bool] = []
         let dependencies = makeDependencies(
             scheduler: scheduler,
             resolveUserAgent: { "claude-code/2.1.77" },
-            getAccessToken: {
-                getAccessTokenCalls += 1
+            getCachedOAuthToken: { allowInteraction in
+                getCachedTokenCalls.append(allowInteraction)
+                return nil
+            },
+            getOAuthCredentials: { allowInteraction in
+                getOAuthCredentialCalls.append(allowInteraction)
                 return nil
             },
             fetchUsage: { _ in
@@ -710,8 +715,9 @@ final class ClaudeUsageServiceTests: XCTestCase {
         await Task.yield()
         await Task.yield()
 
-        XCTAssertEqual(getAccessTokenCalls, 1)
-        XCTAssertEqual(service.error, "Keychain access required")
+        XCTAssertEqual(getCachedTokenCalls, [false])
+        XCTAssertEqual(getOAuthCredentialCalls, [false])
+        XCTAssertEqual(service.error, "Claude authentication needs attention. Reconnect Claude Code.")
         XCTAssertEqual(service.recoveryAction, .reconnect)
         XCTAssertTrue(scheduler.intervals.isEmpty)
         XCTAssertFalse(AppSettings.isUsageEnabled)
@@ -719,12 +725,12 @@ final class ClaudeUsageServiceTests: XCTestCase {
 
     func testStartPollingDisablesUsageWhenNoCachedTokenExists() async throws {
         let scheduler = PollSchedulerSpy()
-        var getCachedTokenCalls = 0
+        var getCachedTokenCalls: [Bool] = []
         let dependencies = makeDependencies(
             scheduler: scheduler,
             resolveUserAgent: { "claude-code/2.1.77" },
-            getCachedOAuthToken: {
-                getCachedTokenCalls += 1
+            getCachedOAuthToken: { allowInteraction in
+                getCachedTokenCalls.append(allowInteraction)
                 return nil
             },
             fetchUsage: { _ in
@@ -739,7 +745,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         await Task.yield()
         await Task.yield()
 
-        XCTAssertEqual(getCachedTokenCalls, 1)
+        XCTAssertEqual(getCachedTokenCalls, [false])
         XCTAssertFalse(AppSettings.isUsageEnabled)
         XCTAssertFalse(service.isConnected)
         XCTAssertTrue(scheduler.intervals.isEmpty)
@@ -751,7 +757,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         let dependencies = makeDependencies(
             scheduler: scheduler,
             resolveUserAgent: { "claude-code/2.1.77" },
-            getCachedOAuthToken: { nil },
+            getCachedOAuthToken: { _ in nil },
             getOAuthCredentials: { allowInteraction in
                 XCTAssertFalse(allowInteraction)
                 return self.makeCredentials(
@@ -785,7 +791,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         let dependencies = makeDependencies(
             scheduler: scheduler,
             resolveUserAgent: { "claude-code/2.1.77" },
-            getCachedOAuthToken: { "stale-cached-token" },
+            getCachedOAuthToken: { _ in "stale-cached-token" },
             getOAuthCredentials: { allowInteraction in
                 XCTAssertFalse(allowInteraction)
                 return self.makeCredentials(
@@ -858,7 +864,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
             scheduler: scheduler,
             resolveUserAgent: { "claude-code/2.1.77" },
             getOAuthCredentials: { allowInteraction in
-                XCTAssertTrue(allowInteraction)
+                XCTAssertFalse(allowInteraction)
                 return self.makeCredentials(accessToken: "token", scopes: ["openid"])
             },
             fetchUsage: { _ in
@@ -995,16 +1001,16 @@ final class ClaudeUsageServiceTests: XCTestCase {
         XCTAssertTrue(scheduler.intervals.isEmpty)
     }
 
-    func testManualFetchPrefersInteractiveCredentialsWhenTokenMismatchExists() async throws {
+    func testManualFetchPrefersSilentCredentialsWhenTokenMismatchExists() async throws {
         let scheduler = PollSchedulerSpy()
         var authHeaders: [String] = []
         let dependencies = makeDependencies(
             scheduler: scheduler,
             resolveUserAgent: { "claude-code/2.1.77" },
             getOAuthCredentials: { allowInteraction in
-                XCTAssertTrue(allowInteraction)
+                XCTAssertFalse(allowInteraction)
                 return self.makeCredentials(
-                    accessToken: "interactive-fresh-token",
+                    accessToken: "silent-fresh-token",
                     scopes: ["user:profile"]
                 )
             },
@@ -1017,7 +1023,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         let service = ClaudeUsageService(dependencies: dependencies)
         await service.performFetch(with: "stale-cached-token", userInitiated: true)
 
-        XCTAssertEqual(authHeaders, ["Bearer interactive-fresh-token"])
+        XCTAssertEqual(authHeaders, ["Bearer silent-fresh-token"])
         XCTAssertEqual(service.currentUsage?.usagePercentage, 44)
         XCTAssertEqual(scheduler.intervals, [60])
     }
@@ -1171,8 +1177,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
     private func makeDependencies(
         scheduler: PollSchedulerSpy,
         resolveUserAgent: @escaping () -> String?,
-        getAccessToken: @escaping () -> String? = { nil },
-        getCachedOAuthToken: @escaping () -> String? = { nil },
+        getCachedOAuthToken: @escaping (_ allowInteraction: Bool) -> String? = { _ in nil },
         getOAuthCredentials: @escaping (_ allowInteraction: Bool) -> ClaudeOAuthCredentials? = { _ in nil },
         cacheOAuthToken: @escaping (_ token: String) -> Void = { _ in },
         refreshAccessTokenSilently: @escaping () -> String? = { nil },
@@ -1185,7 +1190,6 @@ final class ClaudeUsageServiceTests: XCTestCase {
     ) -> ClaudeUsageServiceDependencies {
         ClaudeUsageServiceDependencies(
             fetchUsage: fetchUsage,
-            getAccessToken: getAccessToken,
             getCachedOAuthToken: getCachedOAuthToken,
             getOAuthCredentials: getOAuthCredentials,
             cacheOAuthToken: cacheOAuthToken,
@@ -1213,7 +1217,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         let dependencies = makeDependencies(
             scheduler: scheduler,
             resolveUserAgent: { "claude-code/2.1.77" },
-            getCachedOAuthToken: cachedToken,
+            getCachedOAuthToken: { _ in cachedToken() },
             loadRecoverySnapshot: snapshot,
             now: now,
             fetchUsage: fetchUsage

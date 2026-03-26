@@ -19,18 +19,22 @@ enum KeychainManager {
     }()
     private static let isoBasic = ISO8601DateFormatter()
 
-    static func getAccessToken() -> String? {
-        readAndCacheAccessToken(allowInteraction: true)
-    }
-
     static func refreshAccessTokenSilently() -> String? {
-        readAndCacheAccessToken(allowInteraction: false)
+        guard let credentials = getOAuthCredentials(allowInteraction: false) else {
+            return nil
+        }
+        cacheOAuthToken(credentials.accessToken)
+        return credentials.accessToken
     }
 
     // MARK: - Anthropic API Key
 
-    static func getAnthropicApiKey() -> String? {
-        readString(service: notchiService, account: anthropicApiKeyAccount)
+    static func getAnthropicApiKey(allowInteraction: Bool = false) -> String? {
+        readString(
+            service: notchiService,
+            account: anthropicApiKeyAccount,
+            allowInteraction: allowInteraction
+        )
     }
 
     static func setAnthropicApiKey(_ key: String?) {
@@ -43,8 +47,12 @@ enum KeychainManager {
 
     // MARK: - Cached OAuth Token
 
-    static func getCachedOAuthToken() -> String? {
-        readString(service: notchiService, account: cachedOAuthTokenAccount)
+    static func getCachedOAuthToken(allowInteraction: Bool = false) -> String? {
+        readString(
+            service: notchiService,
+            account: cachedOAuthTokenAccount,
+            allowInteraction: allowInteraction
+        )
     }
 
     static func cacheOAuthToken(_ token: String) {
@@ -56,14 +64,6 @@ enum KeychainManager {
     }
 
     // MARK: - Claude Code Credentials
-
-    private static func readAndCacheAccessToken(allowInteraction: Bool) -> String? {
-        guard let credentials = getOAuthCredentials(allowInteraction: allowInteraction) else {
-            return nil
-        }
-        cacheOAuthToken(credentials.accessToken)
-        return credentials.accessToken
-    }
 
     static func getOAuthCredentials(allowInteraction: Bool) -> ClaudeOAuthCredentials? {
         guard let json = readClaudeCodeKeychain(allowInteraction: allowInteraction) else {
@@ -163,14 +163,20 @@ enum KeychainManager {
 
     // MARK: - Generic Keychain Helpers
 
-    private static func readString(service: String, account: String) -> String? {
-        let query: [String: Any] = [
+    // Even own-service keychain items can trigger a Security dialog when the app's
+    // code signature changes between Xcode rebuilds, invalidating prior "Always Allow".
+    private static func readString(service: String, account: String, allowInteraction: Bool) -> String? {
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
+
+        if !allowInteraction {
+            query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
+        }
 
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)

@@ -145,7 +145,8 @@ final class EmotionAnalyzer {
     }
 
     private func resolveAPIConfig() -> (apiURL: URL, apiKey: String, model: String)? {
-        guard let apiKey = AppSettings.anthropicApiKey?.trimmingCharacters(in: .whitespacesAndNewlines),
+        guard let apiKey = KeychainManager.getAnthropicApiKey(allowInteraction: false)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
               !apiKey.isEmpty else {
             return loadClaudeSettingsConfig()
         }

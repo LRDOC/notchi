@@ -22,8 +22,7 @@ protocol ClaudeUsagePollTimer {
 
 struct ClaudeUsageServiceDependencies {
     var fetchUsage: (URLRequest) async throws -> (Data, URLResponse)
-    var getAccessToken: () -> String?
-    var getCachedOAuthToken: () -> String?
+    var getCachedOAuthToken: (_ allowInteraction: Bool) -> String?
     var getOAuthCredentials: (_ allowInteraction: Bool) -> ClaudeOAuthCredentials?
     var cacheOAuthToken: (_ token: String) -> Void
     var refreshAccessTokenSilently: () -> String?
@@ -113,11 +112,8 @@ extension ClaudeUsageServiceDependencies {
         fetchUsage: { request in
             try await URLSession.shared.data(for: request)
         },
-        getAccessToken: {
-            KeychainManager.getAccessToken()
-        },
-        getCachedOAuthToken: {
-            KeychainManager.getCachedOAuthToken()
+        getCachedOAuthToken: { allowInteraction in
+            KeychainManager.getCachedOAuthToken(allowInteraction: allowInteraction)
         },
         getOAuthCredentials: { allowInteraction in
             KeychainManager.getOAuthCredentials(allowInteraction: allowInteraction)
@@ -207,8 +203,8 @@ final class ClaudeUsageService {
         stopPolling()
 
         Task {
-            guard let accessToken = dependencies.getAccessToken() else {
-                presentReconnectRequired(noUsageMessage: "Keychain access required")
+            guard let accessToken = resolveStoredAccessToken() else {
+                presentReconnectRequired(noUsageMessage: "Claude authentication needs attention. Reconnect Claude Code.")
                 AppSettings.isUsageEnabled = false
                 return
             }
@@ -221,22 +217,7 @@ final class ClaudeUsageService {
         stopPolling()
 
         Task {
-            let accessToken: String
-            let silentCredentials = dependencies.getOAuthCredentials(false)
-
-            if let cachedToken = dependencies.getCachedOAuthToken() {
-                if let silentCredentials, silentCredentials.accessToken != cachedToken {
-                    accessToken = silentCredentials.accessToken
-                    dependencies.cacheOAuthToken(accessToken)
-                    logger.info("Startup adopted Claude Code credential token over mismatched cached token")
-                } else {
-                    accessToken = cachedToken
-                }
-            } else if let silentCredentials {
-                accessToken = silentCredentials.accessToken
-                dependencies.cacheOAuthToken(accessToken)
-                logger.info("Recovered cached OAuth token from Claude Code credentials for background polling")
-            } else {
+            guard let accessToken = resolveStoredAccessToken() else {
                 logger.info("No cached token, user must connect manually")
                 isConnected = false
                 AppSettings.isUsageEnabled = false
@@ -267,6 +248,29 @@ final class ClaudeUsageService {
 
             await performFetch(with: accessToken)
         }
+    }
+
+    private func resolveStoredAccessToken() -> String? {
+        let silentCredentials = dependencies.getOAuthCredentials(false)
+
+        if let cachedToken = dependencies.getCachedOAuthToken(false) {
+            if let silentCredentials, silentCredentials.accessToken != cachedToken {
+                let adoptedToken = silentCredentials.accessToken
+                dependencies.cacheOAuthToken(adoptedToken)
+                logger.info("Adopted Claude Code credential token over mismatched cached token")
+                return adoptedToken
+            }
+            return cachedToken
+        }
+
+        if let silentCredentials {
+            let recoveredToken = silentCredentials.accessToken
+            dependencies.cacheOAuthToken(recoveredToken)
+            logger.info("Recovered cached OAuth token from Claude Code credentials")
+            return recoveredToken
+        }
+
+        return nil
     }
 
     func retryNow() {
@@ -805,7 +809,7 @@ final class ClaudeUsageService {
         allowPreflightRefreshRecovery: Bool,
         allow401RefreshRecovery: Bool
     ) async -> PreflightResult {
-        guard let credentials = dependencies.getOAuthCredentials(userInitiated) else {
+        guard let credentials = dependencies.getOAuthCredentials(false) else {
             return .proceed(accessToken)
         }
 
