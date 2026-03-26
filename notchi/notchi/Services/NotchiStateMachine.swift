@@ -11,13 +11,16 @@ final class NotchiStateMachine {
     let sessionStore = SessionStore.shared
 
     private var emotionDecayTimer: Task<Void, Never>?
+    private var nonClaudeLivePollTask: Task<Void, Never>?
     private var pendingSyncTasks: [String: Task<Void, Never>] = [:]
     private var pendingPositionMarks: [String: Task<Void, Never>] = [:]
     private var transientActivityTasks: [String: Task<Void, Never>] = [:]
+    private var liveSyncInFlight: Set<String> = []
     private var fileWatchers: [String: (source: DispatchSourceFileSystemObject, fd: Int32)] = [:]
 
     private static let syncDebounce: Duration = .milliseconds(100)
     private static let waitingClearGuard: TimeInterval = 2.0
+    private static let nonClaudeLivePollInterval: Duration = .milliseconds(850)
 
     var currentState: NotchiState {
         sessionStore.effectiveSession?.state ?? .idle
@@ -25,6 +28,7 @@ final class NotchiStateMachine {
 
     private init() {
         startEmotionDecayTimer()
+        startNonClaudeLivePoller()
     }
 
     func handleEvent(_ event: HookEvent) {
@@ -51,11 +55,11 @@ final class NotchiStateMachine {
                 pendingPositionMarks.removeValue(forKey: event.sessionId)?.cancel()
             }
 
-            if isClaudeSource {
+            if isClaudeSource, session.isInteractive {
                 startFileWatcher(sessionId: event.sessionId, cwd: event.cwd)
             }
 
-            if let prompt = event.userPrompt {
+            if session.isInteractive, let prompt = event.userPrompt {
                 Task {
                     let result = await EmotionAnalyzer.shared.analyze(prompt)
                     session.emotionState.recordEmotion(result.emotion, intensity: result.intensity, prompt: prompt)
@@ -64,11 +68,11 @@ final class NotchiStateMachine {
 
         case "PreToolUse":
             if isDone {
-                SoundService.shared.playNotificationSound()
+                SoundService.shared.playNotificationSound(sessionId: event.sessionId, isInteractive: session.isInteractive)
             }
 
         case "PermissionRequest":
-            SoundService.shared.playNotificationSound()
+            SoundService.shared.playNotificationSound(sessionId: event.sessionId, isInteractive: session.isInteractive)
 
         case "PostToolUse":
             scheduleFileSync(
@@ -79,10 +83,8 @@ final class NotchiStateMachine {
             )
 
         case "Stop":
-            SoundService.shared.playNotificationSound()
-            if isClaudeSource {
-                stopFileWatcher(sessionId: event.sessionId)
-            }
+            SoundService.shared.playNotificationSound(sessionId: event.sessionId, isInteractive: session.isInteractive)
+            stopFileWatcher(sessionId: event.sessionId)
             scheduleFileSync(
                 sessionId: event.sessionId,
                 cwd: event.cwd,
@@ -96,6 +98,7 @@ final class NotchiStateMachine {
             }
             pendingSyncTasks.removeValue(forKey: event.sessionId)?.cancel()
             pendingPositionMarks.removeValue(forKey: event.sessionId)?.cancel()
+            SoundService.shared.clearCooldown(for: event.sessionId)
             Task { await ConversationParser.shared.resetState(for: event.sessionId) }
             if sessionStore.activeSessionCount == 0 {
                 logger.info("Global state: idle")
@@ -104,7 +107,7 @@ final class NotchiStateMachine {
 
         default:
             if isDone && session.task != .idle {
-                SoundService.shared.playNotificationSound()
+                SoundService.shared.playNotificationSound(sessionId: event.sessionId, isInteractive: session.isInteractive)
             }
         }
 
@@ -125,51 +128,99 @@ final class NotchiStateMachine {
             try? await Task.sleep(for: Self.syncDebounce)
             guard !Task.isCancelled else { return }
 
-            let result = await ConversationParser.shared.parseIncremental(
+            await syncIncremental(
                 sessionId: sessionId,
                 cwd: cwd,
                 source: source,
                 transcriptPath: transcriptPath
             )
-
-            if let prompt = Self.cleanedPrompt(result.latestUserPrompt),
-               let session = sessionStore.sessions[sessionId],
-               session.lastUserPrompt != prompt {
-                session.recordUserPrompt(prompt)
-            }
-
-            if let session = sessionStore.sessions[sessionId],
-               let earliestActivity = Self.earliestActivityTimestamp(from: result) {
-                session.backdatePromptSubmitTimeIfNeeded(earliestActivity.addingTimeInterval(-0.1))
-            }
-
-            if !result.toolEvents.isEmpty {
-                sessionStore.recordParsedToolEvents(result.toolEvents, for: sessionId)
-            }
-
-            if !result.messages.isEmpty {
-                sessionStore.recordAssistantMessages(result.messages, for: sessionId)
-            }
-
-            if !result.messages.isEmpty || !result.toolEvents.isEmpty {
-                pulseTransientActivity(sessionId: sessionId, source: source)
-            }
-
-            guard let session = sessionStore.sessions[sessionId] else {
-                pendingSyncTasks.removeValue(forKey: sessionId)
-                return
-            }
-
-            if result.interrupted && session.task == .working {
-                session.updateTask(.idle)
-                session.updateProcessingState(isProcessing: false)
-            } else if session.task == .waiting,
-                      Date().timeIntervalSince(session.lastActivity) > Self.waitingClearGuard {
-                session.clearPendingQuestions()
-                session.updateTask(.working)
-            }
-
             pendingSyncTasks.removeValue(forKey: sessionId)
+        }
+    }
+
+    private func syncIncremental(
+        sessionId: String,
+        cwd: String,
+        source: AIToolSource,
+        transcriptPath: String?
+    ) async {
+        let result = await ConversationParser.shared.parseIncremental(
+            sessionId: sessionId,
+            cwd: cwd,
+            source: source,
+            transcriptPath: transcriptPath
+        )
+
+        if let prompt = Self.cleanedPrompt(result.latestUserPrompt),
+           let session = sessionStore.sessions[sessionId],
+           session.lastUserPrompt != prompt {
+            session.recordUserPrompt(prompt)
+        }
+
+        if let session = sessionStore.sessions[sessionId],
+           let earliestActivity = Self.earliestActivityTimestamp(from: result) {
+            session.backdatePromptSubmitTimeIfNeeded(earliestActivity.addingTimeInterval(-0.1))
+        }
+
+        if !result.toolEvents.isEmpty {
+            sessionStore.recordParsedToolEvents(result.toolEvents, for: sessionId)
+        }
+
+        if !result.messages.isEmpty {
+            sessionStore.recordAssistantMessages(result.messages, for: sessionId)
+        }
+
+        if !result.messages.isEmpty || !result.toolEvents.isEmpty {
+            pulseTransientActivity(sessionId: sessionId, source: source)
+        }
+
+        guard let session = sessionStore.sessions[sessionId] else {
+            return
+        }
+
+        if result.interrupted && session.task == .working {
+            session.updateTask(.idle)
+            session.updateProcessingState(isProcessing: false)
+        } else if session.task == .waiting,
+                  Date().timeIntervalSince(session.lastActivity) > Self.waitingClearGuard {
+            session.clearPendingQuestions()
+            session.updateTask(.working)
+        }
+    }
+
+    private func startNonClaudeLivePoller() {
+        nonClaudeLivePollTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.nonClaudeLivePollInterval)
+                guard !Task.isCancelled else { return }
+                pollNonClaudeSessions()
+            }
+        }
+    }
+
+    private func pollNonClaudeSessions() {
+        let sessionsToPoll = sessionStore.sessions.values.filter {
+            $0.source != .claude && $0.isInteractive
+        }
+
+        for session in sessionsToPoll {
+            let sessionId = session.id
+            guard !liveSyncInFlight.contains(sessionId) else { continue }
+            liveSyncInFlight.insert(sessionId)
+
+            let cwd = session.cwd
+            let source = session.source
+            let transcriptPath = session.transcriptPath
+
+            Task { @MainActor in
+                defer { liveSyncInFlight.remove(sessionId) }
+                await syncIncremental(
+                    sessionId: sessionId,
+                    cwd: cwd,
+                    source: source,
+                    transcriptPath: transcriptPath
+                )
+            }
         }
     }
 

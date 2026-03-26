@@ -1,11 +1,23 @@
 import Foundation
 import Security
 
+struct ClaudeOAuthCredentials: Equatable {
+    let accessToken: String
+    let expiresAt: Date?
+    let scopes: Set<String>
+}
+
 enum KeychainManager {
     private static let claudeCodeService = "Claude Code-credentials"
     private static let notchiService = "com.ruban.notchi"
     private static let anthropicApiKeyAccount = "anthropicApiKey"
     private static let cachedOAuthTokenAccount = "cachedOAuthToken"
+    private static let isoFractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private static let isoBasic = ISO8601DateFormatter()
 
     static func getAccessToken() -> String? {
         readAndCacheAccessToken(allowInteraction: true)
@@ -46,13 +58,18 @@ enum KeychainManager {
     // MARK: - Claude Code Credentials
 
     private static func readAndCacheAccessToken(allowInteraction: Bool) -> String? {
-        guard let json = readClaudeCodeKeychain(allowInteraction: allowInteraction),
-              let oauth = json["claudeAiOauth"] as? [String: Any],
-              let token = oauth["accessToken"] as? String else {
+        guard let credentials = getOAuthCredentials(allowInteraction: allowInteraction) else {
             return nil
         }
-        cacheOAuthToken(token)
-        return token
+        cacheOAuthToken(credentials.accessToken)
+        return credentials.accessToken
+    }
+
+    static func getOAuthCredentials(allowInteraction: Bool) -> ClaudeOAuthCredentials? {
+        guard let json = readClaudeCodeKeychain(allowInteraction: allowInteraction) else {
+            return nil
+        }
+        return decodeClaudeOAuthCredentials(from: json)
     }
 
     private static func readClaudeCodeKeychain(allowInteraction: Bool) -> [String: Any]? {
@@ -77,6 +94,71 @@ enum KeychainManager {
         }
 
         return json
+    }
+
+    static func decodeClaudeOAuthCredentials(from data: Data) -> ClaudeOAuthCredentials? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return decodeClaudeOAuthCredentials(from: json)
+    }
+
+    static func decodeClaudeOAuthCredentials(from json: [String: Any]) -> ClaudeOAuthCredentials? {
+        guard let oauth = json["claudeAiOauth"] as? [String: Any],
+              let rawToken = oauth["accessToken"] as? String else {
+            return nil
+        }
+
+        let accessToken = rawToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !accessToken.isEmpty else {
+            return nil
+        }
+
+        return ClaudeOAuthCredentials(
+            accessToken: accessToken,
+            expiresAt: parseExpiresAt(from: oauth["expiresAt"] ?? oauth["expires_at"]),
+            scopes: parseScopes(from: oauth["scopes"])
+        )
+    }
+
+    private static func parseScopes(from rawValue: Any?) -> Set<String> {
+        if let scopes = rawValue as? [String] {
+            return Set(scopes.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })
+        }
+
+        if let scopeString = rawValue as? String {
+            let separators = CharacterSet(charactersIn: ", ")
+            let scopes = scopeString
+                .components(separatedBy: separators)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            return Set(scopes)
+        }
+
+        return []
+    }
+
+    private static func parseExpiresAt(from rawValue: Any?) -> Date? {
+        switch rawValue {
+        case let date as Date:
+            return date
+        case let number as NSNumber:
+            return parseEpoch(number.doubleValue)
+        case let string as String:
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            if let epoch = Double(trimmed) {
+                return parseEpoch(epoch)
+            }
+            return isoFractional.date(from: trimmed) ?? isoBasic.date(from: trimmed)
+        default:
+            return nil
+        }
+    }
+
+    private static func parseEpoch(_ value: Double) -> Date {
+        let seconds = value > 1_000_000_000_000 ? value / 1000.0 : value
+        return Date(timeIntervalSince1970: seconds)
     }
 
     // MARK: - Generic Keychain Helpers

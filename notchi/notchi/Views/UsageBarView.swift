@@ -4,13 +4,23 @@ struct UsageBarView: View {
     let usage: QuotaPeriod?
     let isLoading: Bool
     let error: String?
+    let statusMessage: String?
+    let isStale: Bool
+    let recoveryAction: ClaudeUsageRecoveryAction
     var compact: Bool = false
     var isEnabled: Bool = AppSettings.isUsageEnabled
     var onConnect: (() -> Void)?
     var onRetry: (() -> Void)?
 
-    private var isStale: Bool {
-        error != nil && usage != nil
+    var actionHint: String? {
+        switch recoveryAction {
+        case .retry:
+            return "(tap to retry)"
+        case .reconnect:
+            return "(tap to reconnect)"
+        case .none:
+            return nil
+        }
     }
 
     private var effectivePercentage: Int {
@@ -28,8 +38,29 @@ struct UsageBarView: View {
         }
     }
 
+    var shouldShowConnectPlaceholder: Bool {
+        !isEnabled
+            && usage == nil
+            && !isLoading
+            && error == nil
+            && statusMessage == nil
+            && !isStale
+            && recoveryAction == .none
+    }
+
+    var shouldAllowTapAction: Bool {
+        switch recoveryAction {
+        case .reconnect:
+            return true
+        case .retry:
+            return usage == nil
+        case .none:
+            return false
+        }
+    }
+
     var body: some View {
-        if !isEnabled {
+        if shouldShowConnectPlaceholder {
             Button(action: { onConnect?() }) {
                 HStack(spacing: 4) {
                     Image(systemName: "lock.shield")
@@ -53,31 +84,34 @@ struct UsageBarView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 if let error, usage == nil {
-                    Button(action: { onRetry?() }) {
-                        HStack(spacing: 4) {
-                            Text(error)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(TerminalColors.dimmedText)
-                            Text("(tap to retry)")
+                    HStack(spacing: 4) {
+                        Text(error)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(TerminalColors.dimmedText)
+                        if let actionHint {
+                            Text(actionHint)
                                 .font(.system(size: 10))
                                 .foregroundColor(TerminalColors.dimmedText)
                         }
                     }
-                    .buttonStyle(.plain)
                 } else if let usage, let resetTime = usage.formattedResetTime {
-                    HStack(spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text("Resets in \(resetTime)")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(TerminalColors.secondaryText)
-                        if isStale {
-                            Button(action: { onConnect?() }) {
-                                Text("(tap to reconnect)")
-                                    .font(.system(size: 10))
-                                    .foregroundColor(TerminalColors.dimmedText)
-                            }
-                            .buttonStyle(.plain)
+                            .lineLimit(1)
+                        if let statusMessage {
+                            Text("• \(statusMessage)")
+                                .font(.system(size: 9))
+                                .foregroundColor(TerminalColors.dimmedText)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
                         }
                     }
+                } else if let statusMessage, usage != nil {
+                    Text(statusMessage)
+                        .font(.system(size: 10))
+                        .foregroundColor(TerminalColors.dimmedText)
                 } else {
                     Text("Claude Usage")
                         .font(.system(size: 11, weight: .medium))
@@ -95,6 +129,18 @@ struct UsageBarView: View {
             }
 
             progressBar
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard shouldAllowTapAction else { return }
+            switch recoveryAction {
+            case .retry:
+                onRetry?()
+            case .reconnect:
+                onConnect?()
+            case .none:
+                break
+            }
         }
         .padding(.top, compact ? 0 : 5)
     }

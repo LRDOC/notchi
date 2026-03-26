@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>SUBundleName</key>
+	<string>Notchi</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>86400</integer>
+	<key>SUScheduledImpatientCheckInterval</key>
+	<integer>90000</integer>
+	<key>SUFeedURL</key>
+	<string>https://raw.githubusercontent.com/LRDOC/notchi/main/docs/appcast.xml</string>
+	<key>SUShowReleaseNotes</key>
+	<true/>
+	<key>SUPublicEDKey</key>
+	<string>ZfouVFLXx9vyEimCHW+JWgAtikAq19KsWbig7FkB2QA=</string>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
+</dict>
+</plist>

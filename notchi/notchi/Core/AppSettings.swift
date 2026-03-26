@@ -6,6 +6,7 @@ struct AppSettings {
     private static let previousSoundKey = "previousNotificationSound"
     private static let isUsageEnabledKey = "isUsageEnabled"
     private static let disabledToolsKey = "disabledTools"
+    private static let claudeUsageRecoverySnapshotKey = "claudeUsageRecoverySnapshot"
 
     static func isToolEnabled(_ source: AIToolSource) -> Bool {
         let disabled = UserDefaults.standard.stringArray(forKey: disabledToolsKey) ?? []
@@ -25,6 +26,22 @@ struct AppSettings {
     static var isUsageEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: isUsageEnabledKey) }
         set { UserDefaults.standard.set(newValue, forKey: isUsageEnabledKey) }
+    }
+
+    static var claudeUsageRecoverySnapshot: ClaudeUsageRecoverySnapshot? {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: claudeUsageRecoverySnapshotKey) else {
+                return nil
+            }
+            return try? JSONDecoder().decode(ClaudeUsageRecoverySnapshot.self, from: data)
+        }
+        set {
+            if let newValue, let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: claudeUsageRecoverySnapshotKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: claudeUsageRecoverySnapshotKey)
+            }
+        }
     }
 
     static var anthropicApiKey: String? {

@@ -38,6 +38,7 @@ Package.resolved
 .sparkle-keys/
 
 # Claude
+.claude/
 CLAUDE.md
 AGENTS.md
 PLAN.md

@@ -19,6 +19,7 @@ final class SessionData: Identifiable {
     let spriteXPosition: CGFloat
     let spriteYOffset: CGFloat
     private(set) var source: AIToolSource
+    let isInteractive: Bool
 
     private(set) var task: NotchiTask = .idle
     let emotionState = EmotionState()
@@ -85,10 +86,18 @@ final class SessionData: Identifiable {
     private static let yOffsetBase: CGFloat = -5.0
     private static let yOffsetRange: UInt = 51
 
-    init(sessionId: String, cwd: String, sessionNumber: Int, source: AIToolSource = .claude, existingXPositions: [CGFloat] = []) {
+    init(
+        sessionId: String,
+        cwd: String,
+        sessionNumber: Int,
+        source: AIToolSource = .claude,
+        isInteractive: Bool = true,
+        existingXPositions: [CGFloat] = []
+    ) {
         self.id = sessionId
         self.cwd = cwd
         self.sessionNumber = sessionNumber
+        self.isInteractive = isInteractive
         self.source = source
         self.sessionStartTime = Date()
         self.lastActivity = Date()

@@ -26,6 +26,7 @@ struct ExpandedPanelView: View {
     @Binding var showingSettings: Bool
     @Binding var showingSessionActivity: Bool
     @Binding var isActivityCollapsed: Bool
+    let topVisualClearance: CGFloat
 
     private var effectiveSession: SessionData? {
         sessionStore.effectiveSession
@@ -102,6 +103,13 @@ struct ExpandedPanelView: View {
         .task(id: usageRefreshTrigger) {
             await localUsageService.refreshAll()
         }
+        .animation(.easeInOut(duration: 0.25), value: showingSettings)
+        .animation(.easeInOut(duration: 0.25), value: shouldShowSessionPicker)
+        .onChange(of: showingSettings) { _, isShowing in
+            if !isShowing {
+                UpdateManager.shared.clearInlineNoUpdateStatus()
+            }
+        }
     }
 
     @ViewBuilder
@@ -112,7 +120,7 @@ struct ExpandedPanelView: View {
                     .allowsHitTesting(false)
             } else {
                 Spacer()
-                    .frame(height: geometry.size.height * 0.3)
+                    .frame(height: geometry.size.height * 0.4 + topVisualClearance)
                     .allowsHitTesting(false)
             }
 
@@ -151,7 +159,7 @@ struct ExpandedPanelView: View {
                     .allowsHitTesting(false)
             } else {
                 Spacer()
-                    .frame(height: geometry.size.height * 0.3)
+                    .frame(height: geometry.size.height * 0.4 + topVisualClearance)
                     .allowsHitTesting(false)
             }
 
@@ -169,7 +177,10 @@ struct ExpandedPanelView: View {
                 }
 
                 if showIndicator && !isActivityCollapsed {
-                    WorkingIndicatorView(state: state)
+                    WorkingIndicatorView(
+                        state: state,
+                        source: effectiveSession?.source
+                    )
                 }
 
                 usageFooter(compact: isActivityCollapsed)
@@ -292,6 +303,7 @@ struct ExpandedPanelView: View {
 
 struct PanelHeaderButton: View {
     let sfSymbol: String
+    var showsIndicator: Bool = false
     let action: () -> Void
     @State private var isHovered = false
 
@@ -303,6 +315,14 @@ struct PanelHeaderButton: View {
                 .frame(width: 32, height: 32)
                 .background(isHovered ? TerminalColors.hoverBackground : TerminalColors.subtleBackground)
                 .clipShape(Circle())
+                .overlay(alignment: .topTrailing) {
+                    if showsIndicator {
+                        Circle()
+                            .fill(TerminalColors.red)
+                            .frame(width: 6, height: 6)
+                            .offset(x: -6, y: 6)
+                    }
+                }
         }
         .buttonStyle(.plain)
         .onHover { hovering in

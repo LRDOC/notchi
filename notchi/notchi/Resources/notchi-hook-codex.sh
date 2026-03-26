@@ -89,6 +89,96 @@ def extract_text(value) -> str:
     return ""
 
 
+def extract_from_map(payload: dict, keys) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    for key in keys:
+        text = extract_text(payload.get(key))
+        if text:
+            return text
+    return ""
+
+
+def latest_codex_session_id() -> str:
+    root = os.path.expanduser("~/.codex/sessions")
+    best_name = ""
+    best_mtime = -1.0
+
+    if not os.path.isdir(root):
+        return ""
+
+    for dirpath, _, filenames in os.walk(root):
+        for filename in filenames:
+            if not filename.endswith(".jsonl"):
+                continue
+            path = os.path.join(dirpath, filename)
+            try:
+                modified = os.path.getmtime(path)
+            except OSError:
+                continue
+            if modified > best_mtime:
+                best_mtime = modified
+                best_name = os.path.splitext(filename)[0]
+
+    return best_name
+
+
+def extract_session_id(payload: dict) -> str:
+    direct_keys = (
+        "session_id",
+        "sessionId",
+        "session-id",
+        "thread-id",
+        "thread_id",
+        "threadId",
+        "conversation_id",
+        "conversationId",
+        "conversation-id",
+        "invocation_id",
+        "invocationId",
+        "id",
+    )
+
+    nested_keys = (
+        "session",
+        "thread",
+        "conversation",
+        "payload",
+        "meta",
+        "metadata",
+    )
+
+    for key in direct_keys:
+        value = payload.get(key)
+        if isinstance(value, dict):
+            nested = extract_from_map(value, direct_keys)
+            if nested:
+                return nested
+            continue
+        text = extract_text(value)
+        if text:
+            return text
+
+    for key in nested_keys:
+        nested = extract_from_map(payload.get(key), direct_keys)
+        if nested:
+            return nested
+
+    for key in ("session_path", "sessionPath", "transcript_path", "transcriptPath"):
+        path_value = extract_text(payload.get(key))
+        if not path_value:
+            continue
+        basename = os.path.basename(path_value)
+        if basename.endswith(".jsonl"):
+            basename = basename[:-6]
+        elif basename.endswith(".json"):
+            basename = basename[:-5]
+        if basename:
+            return basename
+
+    return latest_codex_session_id()
+
+
 def extract_user_prompt(payload: dict, hook_payload: dict) -> str:
     for value in (
         payload.get("user-prompt"),
@@ -133,8 +223,12 @@ def extract_user_prompt(payload: dict, hook_payload: dict) -> str:
 
     return ""
 
+event_type = extract_text(input_data.get("type")).lower()
+if not event_type:
+    event_type = extract_text(input_data.get("event_type")).lower()
+
 # Codex `notify` payload (documented path in current Codex CLI).
-if input_data.get("type") == "agent-turn-complete":
+if event_type in {"agent-turn-complete", "agent_turn_complete"}:
     cwd_val = (
         input_data.get("cwd")
         or input_data.get("workdir")
@@ -142,16 +236,9 @@ if input_data.get("type") == "agent-turn-complete":
         or input_data.get("working-directory")
         or ""
     )
-    session_id = (
-        input_data.get("thread-id")
-        or input_data.get("thread_id")
-        or input_data.get("threadId")
-        or input_data.get("session_id")
-        or input_data.get("sessionId")
-        or ""
-    )
+    session_id = extract_session_id(input_data)
     if not session_id:
-        session_id = "codex-" + hashlib.md5(cwd_val.encode()).hexdigest()[:8]
+        session_id = "codex-" + hashlib.md5(cwd_val.encode()).hexdigest()[:12]
 
     base = {
         "session_id": session_id,
@@ -161,6 +248,16 @@ if input_data.get("type") == "agent-turn-complete":
         "permission_mode": "default",
         "source": "codex",
     }
+
+    transcript_path = (
+        input_data.get("transcript_path")
+        or input_data.get("transcriptPath")
+        or input_data.get("session_path")
+        or input_data.get("sessionPath")
+        or ""
+    )
+    if transcript_path:
+        base["transcript_path"] = transcript_path
 
     prompt = extract_user_prompt(input_data, {})
 
@@ -230,9 +327,9 @@ cwd_val = (
     or ""
 )
 
-session_id = input_data.get("session_id") or input_data.get("session") or input_data.get("id") or ""
+session_id = extract_session_id(input_data)
 if not session_id:
-    session_id = "codex-" + hashlib.md5(cwd_val.encode()).hexdigest()[:8]
+    session_id = "codex-" + hashlib.md5(cwd_val.encode()).hexdigest()[:12]
 
 output = {
     "session_id": session_id,

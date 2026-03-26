@@ -1,6 +1,8 @@
 # Notchi
 
 A macOS notch companion that reacts to Claude Code, Gemini CLI, and Codex CLI activity in real-time.
+> [!IMPORTANT]
+> If you're currently on Notchi `1.0.0`, please install `1.0.1` or later manually from the DMG [here](https://github.com/LRDOC/notchi/releases/latest). The in-app updater in `1.0.0` is broken for that first upgrade, but should work thereafter.
 
 https://github.com/user-attachments/assets/e417bd40-cae8-47c0-998a-905166cf3513
 
@@ -8,14 +10,23 @@ https://github.com/user-attachments/assets/e417bd40-cae8-47c0-998a-905166cf3513
 
 - Reacts to CLI agent events in real-time (thinking, working, errors, completions)
 - Analyzes conversation sentiment to show emotions (happy, sad, neutral, sob)
-- Click to expand and see session usage
+- Click to expand and see session time and usage quota
 - Supports multiple concurrent sessions with individual sprites
 - Sound effects for events (optional, auto-muted when terminal is focused)
 - Auto-updates via Sparkle
 
+## Requirements
+
+- macOS 15.0+ (Sequoia)
+- MacBook with notch
+- At least one supported CLI installed:
+  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+  - [Gemini CLI](https://github.com/google-gemini/gemini-cli) `>= 0.33.0`
+  - [Codex CLI](https://github.com/openai/codex)
+
 ## Install
 
-1. Download `Notchi-x.x.x.dmg` from the [latest GitHub Release](https://github.com/sk-ruban/notchi/releases/latest)
+1. Download `Notchi-x.x.x.dmg` from the [latest GitHub Release](https://github.com/LRDOC/notchi/releases/latest)
 2. Open the DMG and drag Notchi to Applications
 3. Launch Notchi — it auto-installs hooks for detected CLIs on first launch
 4. A macOS keychain popup will appear asking to access Claude Code's cached OAuth token (used for API usage stats). Click **Always Allow** so it won't prompt again on future launches
@@ -33,16 +44,14 @@ https://github.com/user-attachments/assets/e417bd40-cae8-47c0-998a-905166cf3513
 Installable assets are built automatically by GitHub Actions:
 
 - Workflow: `.github/workflows/release-assets.yml`
-- Trigger: push a `v*` tag (for example `v1.0.0`) or publish a GitHub release
-- Output assets: `Notchi-<version>.zip` and `Notchi-<version>.dmg` attached to the release
+- Trigger: every push to `main` creates an auto pre-release
+- Output assets: `Notchi-main-<sha>.zip` and `Notchi-main-<sha>.dmg`
 
-Build assets locally (same output names) with:
+These auto pre-release artifacts are ad-hoc signed but not notarized. If macOS blocks launch after download, run:
 
-```bash
-./scripts/build-release-assets.sh v1.0.0
-```
+- `xattr -dr com.apple.quarantine /Applications/notchi.app`
 
-This writes artifacts to `dist/` by default.
+Versioned `v*` tag releases are handled by `.github/workflows/release.yml` (signed/notarized when secrets are configured).
 
 ## CLI Hook Setup (Claude, Gemini, Codex)
 
@@ -73,15 +82,6 @@ Per-tool status badges:
 - `Unsupported`: detected CLI version/config is incompatible
 - `Not Found`: CLI config directory not detected on disk
 - Toggle enabled: installed and active
-
-## Requirements
-
-- macOS 15.0+ (Sequoia)
-- MacBook with notch
-- At least one supported CLI installed:
-  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-  - [Gemini CLI](https://github.com/google-gemini/gemini-cli) `>= 0.33.0`
-  - [Codex CLI](https://github.com/openai/codex)
 
 ## How it works
 
@@ -122,10 +122,19 @@ Notes:
 2. Trigger a fresh prompt in the CLI (hooks emit on events).
 3. Re-run `Hooks` install from Settings.
 
+## Contributing
+
+If you have any bugs, ideas, or would like to contribute through pull requests, please check out [Contributing to Notchi](CONTRIBUTING.md).
+
+## Community Ports
+
+- [notchi-for-windows](https://github.com/AptatoX/notchi-for-windows) by [@AptatoX](https://github.com/AptatoX), a community-made Windows port of Notchi
+
 ## Credits
 
-- [Claude Island](https://github.com/farouqaldori/claude-island)
-- [Readout](https://readout.org)
+- [Claude Island](https://github.com/farouqaldori/claude-island) — design inspiration for the app
+- [Readout](https://readout.org) — design inspiration for [notchi.app](https://notchi.app)
+- [Aseprite](https://www.aseprite.org/) — sprite design
 
 ## License
 

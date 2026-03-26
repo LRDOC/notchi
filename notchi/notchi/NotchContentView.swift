@@ -3,6 +3,10 @@ import SwiftUI
 enum NotchConstants {
     static let expandedPanelSize = CGSize(width: 450, height: 450)
     static let expandedPanelHorizontalPadding: CGFloat = 19 * 2
+    static let notchVisualClearance: CGFloat = 36
+    static let grassVisibleFraction: CGFloat = 0.4
+    static let collapseToggleBottomGap: CGFloat = 52
+    static let collapsedPanelHeight: CGFloat = 210
 }
 
 extension Notification.Name {
@@ -19,6 +23,7 @@ struct NotchContentView: View {
     var panelManager: NotchPanelManager = .shared
     var usageService: ClaudeUsageService = .shared
     var localUsageService: LocalUsageService = .shared
+    @ObservedObject private var updateManager = UpdateManager.shared
     @State private var showingPanelSettings = false
     @State private var showingSessionActivity = false
     @State private var isMuted = AppSettings.isMuted
@@ -50,9 +55,23 @@ struct NotchContentView: View {
         isExpanded ? cornerRadiusInsets.opened.bottom : cornerRadiusInsets.closed.bottom
     }
 
+    /// Uses the system notch curve in collapsed mode when available.
+    private var notchClipShape: AnyShape {
+        if !isExpanded, let systemPath = panelManager.systemNotchPath {
+            return AnyShape(SystemNotchShape(cgPath: systemPath))
+        }
+        return AnyShape(NotchShape(
+            topCornerRadius: topCornerRadius,
+            bottomCornerRadius: bottomCornerRadius
+        ))
+    }
+
     private var grassHeight: CGFloat {
-        let expandedPanelHeight = NotchConstants.expandedPanelSize.height - notchSize.height - 24
-        return expandedPanelHeight * 0.3 + notchSize.height
+        // Keep the visual ratio in expanded mode, but shrink the grass layer
+        // when the activity panel is collapsed so usage rows remain readable.
+        return expandedPanelHeight * NotchConstants.grassVisibleFraction
+            + notchSize.height
+            + NotchConstants.notchVisualClearance
     }
 
     private var shouldShowBackButton: Bool {
@@ -62,8 +81,7 @@ struct NotchContentView: View {
 
     private var expandedPanelHeight: CGFloat {
         let fullHeight = NotchConstants.expandedPanelSize.height - notchSize.height - 24
-        let collapsedHeight: CGFloat = 155
-        return isActivityCollapsed ? collapsedHeight : fullHeight
+        return isActivityCollapsed ? NotchConstants.collapsedPanelHeight : fullHeight
     }
 
     var body: some View {
@@ -108,14 +126,11 @@ struct NotchContentView: View {
                         .padding(8)
                 }
                 .buttonStyle(.plain)
-                .offset(y: grassHeight - 30)
+                .offset(y: max(0, grassHeight - NotchConstants.collapseToggleBottomGap))
                 .padding(.trailing, 30)
             }
         }
-        .clipShape(NotchShape(
-            topCornerRadius: topCornerRadius,
-            bottomCornerRadius: bottomCornerRadius
-        ))
+        .clipShape(notchClipShape)
         .shadow(
             color: isExpanded ? .black.opacity(0.7) : .clear,
             radius: 6
@@ -152,7 +167,8 @@ struct NotchContentView: View {
                     localUsageService: localUsageService,
                     showingSettings: $showingPanelSettings,
                     showingSessionActivity: $showingSessionActivity,
-                    isActivityCollapsed: $isActivityCollapsed
+                    isActivityCollapsed: $isActivityCollapsed,
+                    topVisualClearance: NotchConstants.notchVisualClearance
                 )
                 .frame(
                     width: isExpanded ? (NotchConstants.expandedPanelSize.width - 48) : 0,
@@ -195,7 +211,11 @@ struct NotchContentView: View {
 
     private var headerButtons: some View {
         HStack(spacing: 8) {
-            PanelHeaderButton(sfSymbol: "gearshape", action: { showingPanelSettings = true })
+            PanelHeaderButton(
+                sfSymbol: "gearshape",
+                showsIndicator: updateManager.hasPendingUpdate,
+                action: { showingPanelSettings = true }
+            )
             PanelHeaderButton(sfSymbol: "xmark", action: { panelManager.collapse() })
         }
         .padding(.trailing, 8)
@@ -244,10 +264,6 @@ struct NotchContentView: View {
             state: topSession?.state ?? .idle,
             isSelected: true
         )
-    }
-
-    private func openSettings() {
-        showingPanelSettings = true
     }
 
     private func toggleMute() {

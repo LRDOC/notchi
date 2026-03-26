@@ -114,7 +114,13 @@ final class SessionStore {
             dismissedSessionIds.remove(event.sessionId)
         }
 
-        let session = getOrCreateSession(sessionId: event.sessionId, cwd: event.cwd, source: source)
+        let isInteractive = event.interactive ?? true
+        let session = getOrCreateSession(
+            sessionId: event.sessionId,
+            cwd: event.cwd,
+            source: source,
+            isInteractive: isInteractive
+        )
         let isProcessing = event.status != "waiting_for_input"
         session.updateProcessingState(isProcessing: isProcessing)
 
@@ -286,7 +292,12 @@ final class SessionStore {
         }
     }
 
-    private func getOrCreateSession(sessionId: String, cwd: String, source: AIToolSource = .claude) -> SessionData {
+    private func getOrCreateSession(
+        sessionId: String,
+        cwd: String,
+        source: AIToolSource = .claude,
+        isInteractive: Bool = true
+    ) -> SessionData {
         if let existing = sessions[sessionId] {
             if existing.source != source, existing.source == .claude, source != .claude {
                 existing.updateSource(source)
@@ -299,7 +310,14 @@ final class SessionStore {
         let sessionNumber = nextSessionNumberByProject[projectName, default: 0] + 1
         nextSessionNumberByProject[projectName] = sessionNumber
         let existingXPositions = sessions.values.map(\.spriteXPosition)
-        let session = SessionData(sessionId: sessionId, cwd: cwd, sessionNumber: sessionNumber, source: source, existingXPositions: existingXPositions)
+        let session = SessionData(
+            sessionId: sessionId,
+            cwd: cwd,
+            sessionNumber: sessionNumber,
+            source: source,
+            isInteractive: isInteractive,
+            existingXPositions: existingXPositions
+        )
         sessions[sessionId] = session
         logger.info("Created session #\(sessionNumber): \(sessionId, privacy: .public) at \(cwd, privacy: .public) source: \(source.rawValue, privacy: .public)")
 

@@ -1,40 +1,43 @@
 import AppKit
+import os.log
 import Sparkle
 import SwiftUI
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+private let logger = Logger(subsystem: "com.ruban.notchi", category: "AppDelegate")
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
     private var notchPanel: NotchPanel?
     private let windowHeight: CGFloat = 500
 
-    private let updater: SPUUpdater
-    private let userDriver: NotchUserDriver
-
-    override init() {
-        userDriver = NotchUserDriver()
-        updater = SPUUpdater(
-            hostBundle: Bundle.main,
-            applicationBundle: Bundle.main,
-            userDriver: userDriver,
-            delegate: nil
-        )
-        super.init()
-
-        UpdateManager.shared.setUpdater(updater)
-
-        do {
-            try updater.start()
-        } catch {
-            print("Failed to start Sparkle updater: \(error)")
+    private var updaterStarted = false
+    private var temporarilyRegularForUpdateSession = false
+    private lazy var standardUserDriver = SPUStandardUserDriver(
+        hostBundle: .main,
+        delegate: self
+    )
+    private lazy var updateUserDriver = NotchiUpdateUserDriver(
+        standardUserDriver: standardUserDriver,
+        didFinishCustomSession: { [weak self] in
+            UpdateManager.shared.finishUpdateSession()
+            self?.restoreAccessoryModeIfNeeded()
         }
-    }
+    )
+    private lazy var updater = SPUUpdater(
+        hostBundle: .main,
+        applicationBundle: .main,
+        userDriver: updateUserDriver,
+        delegate: self
+    )
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
         setupNotchWindow()
         observeScreenChanges()
+        observeWakeNotifications()
         startHookServices()
         startUsageService()
-        updater.checkForUpdates()
+        startUpdater()
     }
 
     private func startHookServices() {
@@ -88,6 +91,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
     }
 
+    private func observeWakeNotifications() {
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleSystemWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
+    }
+
     @objc private func repositionWindow() {
         MainActor.assumeIsolated {
             guard let panel = notchPanel else { return }
@@ -96,6 +108,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             NotchPanelManager.shared.updateGeometry(for: screen)
             panel.setFrame(windowFrame(for: screen), display: true)
+        }
+    }
+
+    @objc private func handleSystemWake() {
+        MainActor.assumeIsolated {
+            logger.info("System woke, restarting Claude usage polling")
+            ClaudeUsageService.shared.startPolling()
         }
     }
 
@@ -113,4 +132,105 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ClaudeUsageService.shared.startPolling()
     }
 
+    private func startUpdater() {
+        guard !updaterStarted else { return }
+
+        UpdateManager.shared.setUpdater(updater)
+        do {
+            try updater.start()
+        } catch {
+            logger.error("Failed to start Sparkle updater: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        updaterStarted = true
+    }
+
+    private func presentUpdateUIIfNeeded() {
+        guard NSApp.activationPolicy() != .regular else {
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        temporarilyRegularForUpdateSession = true
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func restoreAccessoryModeIfNeeded() {
+        guard temporarilyRegularForUpdateSession else { return }
+        temporarilyRegularForUpdateSession = false
+        NSApp.setActivationPolicy(.accessory)
+    }
+}
+
+// MARK: - SPUUpdaterDelegate
+
+extension AppDelegate {
+    // Sparkle's NSError integer constants are documented in SUErrors.h but are not
+    // imported into this Swift target as symbols. Keep the named mapping here so
+    // abort filtering stays tied to the Sparkle 2.9 definitions.
+    private static let noUpdateErrorCode = 1001
+    private static let installationCanceledErrorCode = 4007
+
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        UpdateManager.shared.updateFound(version: item.displayVersionString)
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
+        UpdateManager.shared.noUpdateFound()
+    }
+
+    func updater(
+        _ updater: SPUUpdater,
+        userDidMakeChoice choice: SPUUserUpdateChoice,
+        forUpdate updateItem: SUAppcastItem,
+        state: SPUUserUpdateState
+    ) {
+        UpdateManager.shared.userMadeChoice(
+            choice,
+            stage: state.stage,
+            version: updateItem.displayVersionString
+        )
+    }
+
+    func updater(_ updater: SPUUpdater, willDownloadUpdate item: SUAppcastItem, with request: NSMutableURLRequest) {
+        UpdateManager.shared.downloadStarted()
+    }
+
+    func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
+        UpdateManager.shared.readyToInstall(version: item.displayVersionString)
+    }
+
+    func updater(
+        _ updater: SPUUpdater,
+        willInstallUpdateOnQuit item: SUAppcastItem,
+        immediateInstallationBlock immediateInstallHandler: @escaping () -> Void
+    ) -> Bool {
+        UpdateManager.shared.readyToInstall(version: item.displayVersionString)
+        return false
+    }
+
+    func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
+        let nsError = error as NSError
+
+        if nsError.domain == SUSparkleErrorDomain,
+           (nsError.code == Self.noUpdateErrorCode || nsError.code == Self.installationCanceledErrorCode) {
+            return
+        }
+
+        UpdateManager.shared.updateError(nsError.localizedDescription)
+    }
+}
+
+// MARK: - SPUStandardUserDriverDelegate
+
+extension AppDelegate {
+    func standardUserDriverWillShowModalAlert() {
+        presentUpdateUIIfNeeded()
+    }
+
+    func standardUserDriverWillFinishUpdateSession() {
+        UpdateManager.shared.finishUpdateSession()
+        restoreAccessoryModeIfNeeded()
+    }
 }

@@ -6,18 +6,24 @@ private let logger = Logger(subsystem: "com.ruban.notchi", category: "SocketServ
 typealias HookEventHandler = @Sendable (HookEvent) -> Void
 
 final class SocketServer {
-    static let shared = SocketServer()
     static let socketPath = "/tmp/notchi.sock"
+    static let shared = SocketServer(socketPath: socketPath, clientReadTimeout: 0.5)
 
+    private let socketPath: String
+    private let clientReadTimeout: TimeInterval
     private var serverSocket: Int32 = -1
     private var acceptSource: DispatchSourceRead?
     private var eventHandler: HookEventHandler?
-    private let queue = DispatchQueue(label: "com.ruban.notchi.socket", qos: .userInitiated)
+    private let serverQueue = DispatchQueue(label: "com.ruban.notchi.socket.server", qos: .userInitiated)
+    private let clientQueue = DispatchQueue(label: "com.ruban.notchi.socket.client", qos: .userInitiated, attributes: .concurrent)
 
-    private init() {}
+    init(socketPath: String = SocketServer.socketPath, clientReadTimeout: TimeInterval = 0.5) {
+        self.socketPath = socketPath
+        self.clientReadTimeout = clientReadTimeout
+    }
 
     func start(onEvent: @escaping HookEventHandler) {
-        queue.async { [weak self] in
+        serverQueue.async { [weak self] in
             self?.startServer(onEvent: onEvent)
         }
     }
@@ -27,7 +33,7 @@ final class SocketServer {
 
         eventHandler = onEvent
 
-        unlink(Self.socketPath)
+        unlink(socketPath)
 
         serverSocket = socket(AF_UNIX, SOCK_STREAM, 0)
         guard serverSocket >= 0 else {
@@ -40,7 +46,7 @@ final class SocketServer {
 
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
-        Self.socketPath.withCString { ptr in
+        socketPath.withCString { ptr in
             withUnsafeMutablePointer(to: &addr.sun_path) { pathPtr in
                 let pathBufferPtr = UnsafeMutableRawPointer(pathPtr)
                     .assumingMemoryBound(to: CChar.self)
@@ -61,7 +67,7 @@ final class SocketServer {
             return
         }
 
-        chmod(Self.socketPath, 0o777)
+        chmod(socketPath, 0o777)
 
         guard listen(serverSocket, 10) == 0 else {
             logger.error("Failed to listen: \(errno)")
@@ -70,11 +76,11 @@ final class SocketServer {
             return
         }
 
-        logger.info("Listening on \(Self.socketPath, privacy: .public)")
+        logger.info("Listening on \(self.socketPath, privacy: .public)")
 
-        acceptSource = DispatchSource.makeReadSource(fileDescriptor: serverSocket, queue: queue)
+        acceptSource = DispatchSource.makeReadSource(fileDescriptor: serverSocket, queue: serverQueue)
         acceptSource?.setEventHandler { [weak self] in
-            self?.acceptConnection()
+            self?.acceptConnections()
         }
         acceptSource?.setCancelHandler { [weak self] in
             if let fd = self?.serverSocket, fd >= 0 {
@@ -86,37 +92,87 @@ final class SocketServer {
     }
 
     func stop() {
-        acceptSource?.cancel()
-        acceptSource = nil
-        unlink(Self.socketPath)
+        serverQueue.async { [weak self] in
+            self?.stopServer()
+        }
     }
 
-    private func acceptConnection() {
-        let clientSocket = accept(serverSocket, nil, nil)
-        guard clientSocket >= 0 else { return }
-
-        var nosigpipe: Int32 = 1
-        setsockopt(clientSocket, SOL_SOCKET, SO_NOSIGPIPE, &nosigpipe, socklen_t(MemoryLayout<Int32>.size))
-
-        handleClient(clientSocket)
-    }
-
-    private func handleClient(_ clientSocket: Int32) {
-        defer { close(clientSocket) }
-
-        var allData = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-
-        while true {
-            let bytesRead = read(clientSocket, &buffer, buffer.count)
-            if bytesRead > 0 {
-                allData.append(contentsOf: buffer[0..<bytesRead])
-            } else {
-                break
-            }
+    private func stopServer() {
+        if let acceptSource {
+            acceptSource.cancel()
+            self.acceptSource = nil
+        } else if serverSocket >= 0 {
+            close(serverSocket)
+            serverSocket = -1
         }
 
-        guard !allData.isEmpty else { return }
+        unlink(socketPath)
+    }
+
+    private func acceptConnections() {
+        while true {
+            let clientSocket = accept(serverSocket, nil, nil)
+            guard clientSocket >= 0 else {
+                let acceptError = errno
+
+                if acceptError == EINTR {
+                    continue
+                }
+
+                if acceptError == EAGAIN || acceptError == EWOULDBLOCK {
+                    return
+                }
+
+                logger.error("Failed to accept connection: \(acceptError)")
+                return
+            }
+
+            configureClientSocket(clientSocket)
+            let eventHandler = self.eventHandler
+            clientQueue.async { [weak self] in
+                guard let self else {
+                    close(clientSocket)
+                    return
+                }
+
+                self.handleClient(clientSocket, eventHandler: eventHandler)
+            }
+        }
+    }
+
+    private func configureClientSocket(_ clientSocket: Int32) {
+        let clientFlags = fcntl(clientSocket, F_GETFL)
+        if clientFlags >= 0, fcntl(clientSocket, F_SETFL, clientFlags & ~O_NONBLOCK) != 0 {
+            logger.warning("Failed to clear O_NONBLOCK on client socket: \(errno)")
+        }
+
+        var nosigpipe: Int32 = 1
+        if setsockopt(
+            clientSocket,
+            SOL_SOCKET,
+            SO_NOSIGPIPE,
+            &nosigpipe,
+            socklen_t(MemoryLayout<Int32>.size)
+        ) != 0 {
+            logger.warning("Failed to set SO_NOSIGPIPE: \(errno)")
+        }
+
+        var timeout = makeTimeval(for: clientReadTimeout)
+        if setsockopt(
+            clientSocket,
+            SOL_SOCKET,
+            SO_RCVTIMEO,
+            &timeout,
+            socklen_t(MemoryLayout<timeval>.size)
+        ) != 0 {
+            logger.warning("Failed to set SO_RCVTIMEO: \(errno)")
+        }
+    }
+
+    private func handleClient(_ clientSocket: Int32, eventHandler: HookEventHandler?) {
+        defer { close(clientSocket) }
+
+        guard let allData = readClientPayload(from: clientSocket), !allData.isEmpty else { return }
 
         if let event = decodeEvent(from: allData) {
             dispatch(event)
@@ -151,6 +207,44 @@ final class SocketServer {
     private func dispatch(_ event: HookEvent) {
         logEvent(event)
         eventHandler?(event)
+    }
+
+    private func readClientPayload(from clientSocket: Int32) -> Data? {
+        var allData = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+
+        while true {
+            let bytesRead = read(clientSocket, &buffer, buffer.count)
+
+            if bytesRead > 0 {
+                allData.append(contentsOf: buffer[0..<bytesRead])
+                continue
+            }
+
+            if bytesRead == 0 {
+                return allData
+            }
+
+            let readError = errno
+            if readError == EINTR {
+                continue
+            }
+
+            if readError == EAGAIN || readError == EWOULDBLOCK {
+                logger.warning("Dropped idle client connection after read timeout")
+                return nil
+            }
+
+            logger.warning("Failed to read client socket: \(readError)")
+            return nil
+        }
+    }
+
+    private func makeTimeval(for timeout: TimeInterval) -> timeval {
+        let clampedTimeout = max(timeout, 0)
+        let seconds = floor(clampedTimeout)
+        let microseconds = (clampedTimeout - seconds) * 1_000_000
+        return timeval(tv_sec: Int(seconds), tv_usec: Int32(microseconds.rounded()))
     }
 
     private func logEvent(_ event: HookEvent) {

@@ -14,6 +14,7 @@ struct HookEvent: Decodable, Sendable {
     let transcriptPath: String?
     let permissionMode: String?
     let source: String?
+    let interactive: Bool?
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
@@ -48,6 +49,7 @@ struct HookEvent: Decodable, Sendable {
         case sessionPath = "session_path"
         case permissionMode = "permission_mode"
         case source
+        case interactive
     }
 
     init(from decoder: Decoder) throws {
@@ -87,6 +89,7 @@ struct HookEvent: Decodable, Sendable {
         transcriptPath = Self.decodeOptionalString(from: container, keys: [.transcriptPath, .sessionPath])
         permissionMode = Self.decodeOptionalString(from: container, key: .permissionMode)
         source = Self.decodeOptionalString(from: container, key: .source)
+        interactive = Self.decodeOptionalBool(from: container, key: .interactive)
     }
 
     var resolvedSource: String {
@@ -171,6 +174,29 @@ struct HookEvent: Decodable, Sendable {
         if let value = try? container.decodeIfPresent(String.self, forKey: key),
            let parsed = Int(value) {
             return parsed
+        }
+        return nil
+    }
+
+    private static func decodeOptionalBool(
+        from container: KeyedDecodingContainer<CodingKeys>,
+        key: CodingKeys
+    ) -> Bool? {
+        if let value = try? container.decodeIfPresent(Bool.self, forKey: key) {
+            return value
+        }
+        if let value = try? container.decodeIfPresent(String.self, forKey: key) {
+            switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "true", "1", "yes":
+                return true
+            case "false", "0", "no":
+                return false
+            default:
+                return nil
+            }
+        }
+        if let value = try? container.decodeIfPresent(Int.self, forKey: key) {
+            return value != 0
         }
         return nil
     }

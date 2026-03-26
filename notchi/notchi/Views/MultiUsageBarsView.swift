@@ -13,12 +13,30 @@ struct MultiUsageBarsView: View {
     var onClaudeRetry: (() -> Void)?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        let rows = VStack(alignment: .leading, spacing: 7) {
             claudeRow
             codexRow
             geminiRow
         }
-        .padding(.top, compact ? 0 : 5)
+
+        Group {
+            if compact {
+                rows
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 7)
+                    .background {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.black)
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                    }
+                    .padding(.top, 10)
+            } else {
+                rows.padding(.top, 5)
+            }
+        }
     }
 
     private var claudeRow: some View {
@@ -63,12 +81,11 @@ struct MultiUsageBarsView: View {
 
         let statusText: String
         if let usage = codexUsage {
-            if let reset = usage.formattedResetTime, let p = usage.effectivePercentage {
-                statusText = "Reset \(reset) • \(p)%"
-            } else if let p = usage.effectivePercentage {
-                statusText = "\(p)% • \(formatTokens(usage.totalTokens)) tok"
+            let resetText = usage.formattedResetTime ?? "n/a"
+            if let p = usage.effectivePercentage {
+                statusText = "Reset \(resetText) • \(p)%"
             } else {
-                statusText = "\(formatTokens(usage.totalTokens)) tok"
+                statusText = "Reset \(resetText)"
             }
         } else if localLoading {
             statusText = "Loading..."
@@ -92,14 +109,8 @@ struct MultiUsageBarsView: View {
         let statusText: String
         if let usage = geminiUsage {
             let contextPercent = Int((value * 100).rounded())
-            var parts = [
-                "I \(formatCompactTokens(usage.inputTokens))",
-                "O \(formatCompactTokens(usage.outputTokens))"
-            ]
-            if usage.cachedTokens > 0 {
-                parts.append("C \(formatCompactTokens(usage.cachedTokens))")
-            }
-            statusText = "~\(contextPercent)% ctx • " + parts.joined(separator: " • ")
+            let contextTotal = usage.inputTokens + usage.outputTokens
+            statusText = "Reset n/a • ~\(contextPercent)% ctx • \(formatCompactTokens(contextTotal)) tok"
         } else if localLoading {
             statusText = "Loading..."
         } else {
