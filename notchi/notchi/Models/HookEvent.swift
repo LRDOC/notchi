@@ -16,6 +16,38 @@ struct HookEvent: Decodable, Sendable {
     let source: String?
     let interactive: Bool?
 
+    init(
+        sessionId: String,
+        cwd: String,
+        event: String,
+        status: String,
+        pid: Int? = nil,
+        tty: String? = nil,
+        tool: String? = nil,
+        toolInput: [String: AnyCodable]? = nil,
+        toolUseId: String? = nil,
+        userPrompt: String? = nil,
+        transcriptPath: String? = nil,
+        permissionMode: String? = nil,
+        source: String? = nil,
+        interactive: Bool? = nil
+    ) {
+        self.sessionId = sessionId
+        self.cwd = cwd
+        self.event = event
+        self.status = status
+        self.pid = pid
+        self.tty = tty
+        self.tool = tool
+        self.toolInput = toolInput
+        self.toolUseId = toolUseId
+        self.userPrompt = userPrompt
+        self.transcriptPath = transcriptPath
+        self.permissionMode = permissionMode
+        self.source = source
+        self.interactive = interactive
+    }
+
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
         case sessionIdCamel = "sessionId"

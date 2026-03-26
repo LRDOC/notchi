@@ -7,6 +7,7 @@ struct AppSettings {
     private static let isUsageEnabledKey = "isUsageEnabled"
     private static let disabledToolsKey = "disabledTools"
     private static let claudeUsageRecoverySnapshotKey = "claudeUsageRecoverySnapshot"
+    private static let codexLastIngestAtKey = "codexLastIngestAt"
 
     static func isToolEnabled(_ source: AIToolSource) -> Bool {
         let disabled = UserDefaults.standard.stringArray(forKey: disabledToolsKey) ?? []
@@ -42,6 +43,11 @@ struct AppSettings {
                 UserDefaults.standard.removeObject(forKey: claudeUsageRecoverySnapshotKey)
             }
         }
+    }
+
+    static var codexLastIngestAt: Date? {
+        get { UserDefaults.standard.object(forKey: codexLastIngestAtKey) as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: codexLastIngestAtKey) }
     }
 
     static var anthropicApiKey: String? {
