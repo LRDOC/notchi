@@ -25,6 +25,9 @@ final class NotchiStateMachine {
     private var transientActivityTasks: [String: Task<Void, Never>] = [:]
     private var liveSyncInFlight: Set<String> = []
     private var fileWatchers: [String: (source: DispatchSourceFileSystemObject, fd: Int32)] = [:]
+    var handleClaudeUsageResumeTrigger: (ClaudeUsageResumeTrigger) -> Void = { trigger in
+        ClaudeUsageService.shared.handleClaudeResumeTrigger(trigger)
+    }
 
     private static let syncDebounce: Duration = .milliseconds(100)
     private static let waitingClearGuard: TimeInterval = 2.0
@@ -83,6 +86,10 @@ final class NotchiStateMachine {
                 }
             }
 
+            if session.isInteractive, !SessionStore.isLocalSlashCommand(event.userPrompt) {
+                handleClaudeUsageResumeTrigger(.userPromptSubmit)
+            }
+
         case "PreToolUse":
             if isDone {
                 SoundService.shared.playNotificationSound(sessionId: event.sessionId, isInteractive: session.isInteractive)
@@ -98,6 +105,9 @@ final class NotchiStateMachine {
                 source: source,
                 transcriptPath: session.transcriptPath
             )
+
+        case "SessionStart":
+            handleClaudeUsageResumeTrigger(.sessionStart)
 
         case "Stop":
             SoundService.shared.playNotificationSound(sessionId: event.sessionId, isInteractive: session.isInteractive)
@@ -600,6 +610,27 @@ final class NotchiStateMachine {
         }
     }
 
+    func reconcileFileSyncResult(_ result: ParseResult, for sessionId: String, hasActiveWatcher: Bool) {
+        guard let session = sessionStore.sessions[sessionId] else { return }
+
+        if !result.messages.isEmpty,
+           session.isInteractive,
+           hasActiveWatcher,
+           session.task == .idle || session.task == .sleeping {
+            session.updateTask(.working)
+            session.updateProcessingState(isProcessing: true)
+        }
+
+        if result.interrupted && session.task == .working {
+            session.updateTask(.idle)
+            session.updateProcessingState(isProcessing: false)
+        } else if session.task == .waiting,
+                  Date().timeIntervalSince(session.lastActivity) > Self.waitingClearGuard {
+            session.clearPendingQuestions()
+            session.updateTask(.working)
+        }
+    }
+
     private func startFileWatcher(sessionId: String, cwd: String) {
         stopFileWatcher(sessionId: sessionId)
 
@@ -650,6 +681,12 @@ final class NotchiStateMachine {
                     session.emotionState.decayAll()
                 }
             }
+        }
+    }
+
+    func resetTestingHooks() {
+        handleClaudeUsageResumeTrigger = { trigger in
+            ClaudeUsageService.shared.handleClaudeResumeTrigger(trigger)
         }
     }
 

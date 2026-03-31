@@ -309,6 +309,63 @@ footer {
   gap: 1.35rem;
 }
 
+.footer-demo-callout {
+  display: inline-flex;
+  align-items: flex-end;
+}
+
+.demo-anchor {
+  position: relative;
+  display: inline-flex;
+  justify-content: flex-end;
+  padding-top: 0.95rem;
+}
+
+.demo-note {
+  position: absolute;
+  right: 0.15rem;
+  bottom: calc(100% - 0.12rem);
+  white-space: nowrap;
+  font-family: 'Nanum Pen Script', 'Marker Felt', cursive;
+  font-size: 1.365rem;
+  font-weight: 500;
+  line-height: 1;
+  color: #e78b57;
+  letter-spacing: 0.01em;
+  transform: rotate(-8deg);
+  transform-origin: bottom right;
+  text-shadow: 0 8px 20px rgba(231, 139, 87, 0.14);
+  pointer-events: none;
+}
+
+.demo-link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+  padding: 0.1rem 0.12rem 0.16rem;
+  border-radius: 999px;
+}
+
+.demo-link:hover,
+.demo-link:focus-visible {
+  color: var(--color-text);
+}
+
+.demo-link:focus-visible {
+  outline: 2px solid rgba(231, 139, 87, 0.6);
+  outline-offset: 0.18rem;
+}
+
+.demo-link-text {
+  position: relative;
+  z-index: 1;
+  display: inline-block;
+  font-size: 0.92rem;
+  font-weight: 500;
+}
+
 /* Legal pages */
 .legal {
   width: min(100%, 46rem);
@@ -372,6 +429,20 @@ footer {
 
   .footer-row {
     gap: 0.75rem;
+  }
+
+  .footer-demo-callout {
+    align-items: flex-start;
+  }
+
+  .demo-anchor {
+    padding-top: 0.9rem;
+  }
+
+  .demo-note {
+    right: 0.05rem;
+    bottom: calc(100% - 0.08rem);
+    transform: rotate(-8deg);
   }
 }
 

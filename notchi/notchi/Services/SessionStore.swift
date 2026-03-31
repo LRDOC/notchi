@@ -382,7 +382,7 @@ final class SessionStore {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private static func isLocalSlashCommand(_ prompt: String?) -> Bool {
+    static func isLocalSlashCommand(_ prompt: String?) -> Bool {
         guard let prompt, prompt.hasPrefix("/") else { return false }
         let command = String(prompt.prefix(while: { !$0.isWhitespace }))
         return localSlashCommands.contains(command)

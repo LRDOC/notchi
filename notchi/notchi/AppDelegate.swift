@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate, SP
     )
     private lazy var updateUserDriver = NotchiUpdateUserDriver(
         standardUserDriver: standardUserDriver,
+        shouldHandleUpdaterErrorsInline: { UpdateManager.shared.shouldHandleUpdaterErrorInline },
         didFinishCustomSession: { [weak self] in
             UpdateManager.shared.finishUpdateSession()
             self?.restoreAccessoryModeIfNeeded()
@@ -114,7 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate, SP
     @objc private func handleSystemWake() {
         MainActor.assumeIsolated {
             logger.info("System woke, restarting Claude usage polling")
-            ClaudeUsageService.shared.startPolling()
+            ClaudeUsageService.shared.startPolling(afterSystemWake: true)
         }
     }
 
@@ -161,17 +162,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate, SP
         temporarilyRegularForUpdateSession = false
         NSApp.setActivationPolicy(.accessory)
     }
+
 }
 
 // MARK: - SPUUpdaterDelegate
 
 extension AppDelegate {
-    // Sparkle's NSError integer constants are documented in SUErrors.h but are not
-    // imported into this Swift target as symbols. Keep the named mapping here so
-    // abort filtering stays tied to the Sparkle 2.9 definitions.
-    private static let noUpdateErrorCode = 1001
-    private static let installationCanceledErrorCode = 4007
-
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         UpdateManager.shared.updateFound(version: item.displayVersionString)
     }
@@ -213,12 +209,25 @@ extension AppDelegate {
     func updater(_ updater: SPUUpdater, didAbortWithError error: Error) {
         let nsError = error as NSError
 
-        if nsError.domain == SUSparkleErrorDomain,
-           (nsError.code == Self.noUpdateErrorCode || nsError.code == Self.installationCanceledErrorCode) {
+        if UpdateManager.shouldIgnoreAbortError(nsError) {
             return
         }
 
-        UpdateManager.shared.updateError(nsError.localizedDescription)
+        logSparkleAbort(nsError)
+        UpdateManager.shared.updateError()
+    }
+
+    private func logSparkleAbort(_ error: NSError) {
+        let failureReason = error.localizedFailureReason ?? "nil"
+        let recoverySuggestion = error.localizedRecoverySuggestion ?? "nil"
+        let noUpdateReason = (error.userInfo[SPUNoUpdateFoundReasonKey] as? NSNumber)?.stringValue ?? "nil"
+        let latestVersion = (error.userInfo[SPULatestAppcastItemFoundKey] as? SUAppcastItem)?.displayVersionString ?? "nil"
+
+        logger.error(
+            """
+            Sparkle updater aborted. domain=\(error.domain, privacy: .public) code=\(error.code, privacy: .public) description=\(error.localizedDescription, privacy: .public) failureReason=\(failureReason, privacy: .public) recoverySuggestion=\(recoverySuggestion, privacy: .public) noUpdateReason=\(noUpdateReason, privacy: .public) latestAppcastVersion=\(latestVersion, privacy: .public)
+            """
+        )
     }
 }
 

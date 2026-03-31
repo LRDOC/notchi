@@ -1,6 +1,14 @@
 import Combine
 import Sparkle
 
+struct UpdateFailurePresentation: Equatable {
+    let label: String
+
+    init(label: String = "Try again") {
+        self.label = label
+    }
+}
+
 /// Update state published to UI
 enum UpdateState: Equatable {
     case idle
@@ -9,7 +17,7 @@ enum UpdateState: Equatable {
     case updateAvailable(version: String)
     case downloading(progress: Double)
     case readyToInstall(version: String)
-    case error(message: String)
+    case error(UpdateFailurePresentation)
 }
 
 /// Observable update manager that mirrors Sparkle state into SwiftUI.
@@ -17,6 +25,8 @@ enum UpdateState: Equatable {
 @MainActor
 final class UpdateManager: ObservableObject {
     static let shared = UpdateManager()
+    static let noUpdateErrorCode = 1001
+    static let installationCanceledErrorCode = 4007
 
     @Published var state: UpdateState = .idle
     @Published var hasPendingUpdate: Bool = false
@@ -24,6 +34,8 @@ final class UpdateManager: ObservableObject {
     private var resetTask: Task<Void, Never>?
 
     private var updater: SPUUpdater?
+
+    private init() {}
 
     func setUpdater(_ updater: SPUUpdater) {
         self.updater = updater
@@ -34,8 +46,12 @@ final class UpdateManager: ObservableObject {
     func checkForUpdates() {
         guard let updater, updater.canCheckForUpdates else { return }
         resetTask?.cancel()
-        state = .checking
+        beginChecking()
         updater.checkForUpdates()
+    }
+
+    func beginChecking() {
+        state = .checking
     }
 
     func updateFound(version: String) {
@@ -84,8 +100,8 @@ final class UpdateManager: ObservableObject {
         state = .upToDate
     }
 
-    func updateError(_ message: String) {
-        state = .error(message: message)
+    func updateError() {
+        state = .error(UpdateFailurePresentation())
     }
 
     func finishUpdateSession() {
@@ -94,9 +110,22 @@ final class UpdateManager: ObservableObject {
         }
     }
 
-    func clearInlineNoUpdateStatus() {
-        guard case .upToDate = state else { return }
+    func clearTransientStatus() {
+        guard state.isTransientInlineStatus else { return }
         state = .idle
+    }
+
+    var shouldHandleUpdaterErrorInline: Bool {
+        if case .checking = state {
+            return true
+        }
+
+        return false
+    }
+
+    static func shouldIgnoreAbortError(_ error: NSError) -> Bool {
+        error.domain == SUSparkleErrorDomain &&
+            (error.code == noUpdateErrorCode || error.code == installationCanceledErrorCode)
     }
 
     private func clearPendingUpdate(showIdleImmediately: Bool = true) {
@@ -104,6 +133,17 @@ final class UpdateManager: ObservableObject {
 
         if showIdleImmediately {
             state = .idle
+        }
+    }
+}
+
+private extension UpdateState {
+    var isTransientInlineStatus: Bool {
+        switch self {
+        case .upToDate, .error(_):
+            return true
+        default:
+            return false
         }
     }
 }

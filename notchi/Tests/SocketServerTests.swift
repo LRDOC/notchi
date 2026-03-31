@@ -121,11 +121,45 @@ final class SocketServerTests: XCTestCase {
         XCTAssertTrue(validEventDelivered, "Malformed payload should not prevent the next client from being processed")
     }
 
+    func testDuplicateServerStartPreservesExistingListener() async throws {
+        let firstRecorder = EventRecorder()
+        let secondRecorder = EventRecorder()
+        let path = uniqueSocketPath()
+        let (_, listeningPath) = try await makeServer(
+            at: path,
+            clientReadTimeout: 0.5,
+            recorder: firstRecorder
+        )
+
+        let duplicateServer = SocketServer(socketPath: listeningPath, clientReadTimeout: 0.5)
+        activeServers.append((duplicateServer, listeningPath))
+        duplicateServer.start { event in
+            Task {
+                await secondRecorder.record(event)
+            }
+        }
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let client = try connectClient(to: listeningPath)
+        try client.send(makeEventPayload(sessionId: "still-connected"))
+        client.closeConnection()
+
+        let originalServerReceivedEvent = await waitUntil(timeout: 0.5) {
+            await firstRecorder.snapshot().map(\.sessionId) == ["still-connected"]
+        }
+        let duplicateSnapshot = await secondRecorder.snapshot()
+
+        XCTAssertTrue(originalServerReceivedEvent, "Existing listener should remain connected after duplicate startup")
+        XCTAssertTrue(duplicateSnapshot.isEmpty, "Duplicate server should not steal the socket path")
+    }
+
     private func makeServer(
+        at path: String? = nil,
         clientReadTimeout: TimeInterval,
         recorder: EventRecorder
     ) async throws -> (SocketServer, String) {
-        let path = uniqueSocketPath()
+        let path = path ?? uniqueSocketPath()
         let server = SocketServer(socketPath: path, clientReadTimeout: clientReadTimeout)
         activeServers.append((server, path))
 

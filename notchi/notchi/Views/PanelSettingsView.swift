@@ -390,6 +390,7 @@ struct PanelSettingsView: View {
             .padding(.vertical, 2)
             .background(color.opacity(0.15))
             .cornerRadius(4)
+            .frame(maxWidth: 160, alignment: .trailing)
     }
 
     private func usageColor(for percentage: Int) -> Color {
@@ -441,8 +442,8 @@ struct PanelSettingsView: View {
             }
         case .readyToInstall:
             statusBadge("Ready to install", color: TerminalColors.green)
-        case .error(let message):
-            statusBadge(message, color: TerminalColors.red)
+        case .error(let failure):
+            statusBadge(failure.label, color: TerminalColors.red)
         case .idle:
             Text("v\(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0")")
                 .font(.system(size: 10))

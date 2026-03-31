@@ -16,9 +16,7 @@ struct UsageBarView: View {
         switch recoveryAction {
         case .retry:
             return "(tap to retry)"
-        case .reconnect:
-            return "(tap to reconnect)"
-        case .none:
+        case .reconnect, .waitForClaudeCode, .none:
             return nil
         }
     }
@@ -50,7 +48,7 @@ struct UsageBarView: View {
 
     var shouldAllowTapAction: Bool {
         switch recoveryAction {
-        case .reconnect:
+        case .reconnect, .waitForClaudeCode:
             return true
         case .retry:
             return usage == nil
@@ -136,7 +134,7 @@ struct UsageBarView: View {
             switch recoveryAction {
             case .retry:
                 onRetry?()
-            case .reconnect:
+            case .reconnect, .waitForClaudeCode:
                 onConnect?()
             case .none:
                 break

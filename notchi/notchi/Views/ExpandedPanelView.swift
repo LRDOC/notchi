@@ -91,13 +91,11 @@ struct ExpandedPanelView: View {
                     .disabled(showingSettings || shouldShowSessionPicker)
                     .accessibilityHidden(showingSettings || shouldShowSessionPicker)
 
-                PanelSettingsView()
-                    .frame(width: geometry.size.width)
-                    .offset(x: showingSettings ? 0 : geometry.size.width)
-                    .opacity(showingSettings ? 1 : 0)
-                    .allowsHitTesting(showingSettings)
-                    .disabled(!showingSettings)
-                    .accessibilityHidden(!showingSettings)
+                if showingSettings {
+                    PanelSettingsView()
+                        .frame(width: geometry.size.width)
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
             }
         }
         .task(id: usageRefreshTrigger) {
@@ -107,7 +105,7 @@ struct ExpandedPanelView: View {
         .animation(.easeInOut(duration: 0.25), value: shouldShowSessionPicker)
         .onChange(of: showingSettings) { _, isShowing in
             if !isShowing {
-                UpdateManager.shared.clearInlineNoUpdateStatus()
+                UpdateManager.shared.clearTransientStatus()
             }
         }
     }
