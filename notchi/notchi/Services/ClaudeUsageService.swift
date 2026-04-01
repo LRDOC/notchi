@@ -70,7 +70,11 @@ enum ClaudeCLIResolver {
     struct TestHooks {
         var environment: () -> [String: String]
         var isExecutableFile: (String) -> Bool
-        var runProcess: (_ executablePath: String, _ arguments: [String]) -> String?
+        var runProcess: (
+            _ executablePath: String,
+            _ arguments: [String],
+            _ environment: [String: String]?
+        ) -> String?
     }
 
     private static let commandTimeout: TimeInterval = 2
@@ -95,8 +99,12 @@ enum ClaudeCLIResolver {
             isExecutableFile: { path in
                 FileManager.default.isExecutableFile(atPath: path)
             },
-            runProcess: { executablePath, arguments in
-                defaultRunProcess(executablePath: executablePath, arguments: arguments)
+            runProcess: { executablePath, arguments, environment in
+                defaultRunProcess(
+                    executablePath: executablePath,
+                    arguments: arguments,
+                    environment: environment
+                )
             }
         )
     }
@@ -130,13 +138,7 @@ enum ClaudeCLIResolver {
     }
 
     static func resolveCommandPathViaShell(environment: [String: String]) -> String? {
-        let shellCandidates = [environment["SHELL"], "/bin/zsh", "/bin/bash"].compactMap { $0 }
-        var seenShells: Set<String> = []
-
-        for shellPath in shellCandidates {
-            guard !seenShells.contains(shellPath) else { continue }
-            seenShells.insert(shellPath)
-
+        for shellPath in shellCandidates(from: environment) {
             guard testHooks.isExecutableFile(shellPath) else { continue }
             if let resolvedPath = resolveCommandPathViaShell(
                 executablePath: shellPath,
@@ -161,7 +163,7 @@ enum ClaudeCLIResolver {
         executablePath: String,
         arguments: [String]
     ) -> String? {
-        guard let output = testHooks.runProcess(executablePath, arguments) else {
+        guard let output = testHooks.runProcess(executablePath, arguments, nil) else {
             return nil
         }
 
@@ -183,25 +185,100 @@ enum ClaudeCLIResolver {
             .first { $0.hasPrefix("/") }
     }
 
-    private static func resolveVersion(at path: String) -> String? {
-        guard let output = testHooks.runProcess(path, ["--version"]) else {
+    static func resolveVersion(at path: String) -> String? {
+        let environment = versionProbeEnvironment(for: path)
+        if let version = resolveVersion(
+            executablePath: path,
+            arguments: ["--version"],
+            environment: environment
+        ) {
+            return version
+        }
+
+        return resolveVersionViaShell(at: path, environment: environment)
+    }
+
+    static func extractVersion(from output: String) -> String? {
+        let versionLine = output
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { $0.first?.isNumber == true }
+
+        guard let versionLine else { return nil }
+        guard let version = versionLine.split(whereSeparator: \.isWhitespace).first else { return nil }
+        return String(version)
+    }
+
+    private static func shellCandidates(from environment: [String: String]) -> [String] {
+        var seenShells: Set<String> = []
+        return [environment["SHELL"], "/bin/zsh", "/bin/bash"]
+            .compactMap { $0 }
+            .filter { seenShells.insert($0).inserted }
+    }
+
+    private static func versionProbeEnvironment(for path: String) -> [String: String] {
+        var environment = testHooks.environment()
+        let executableDirectory = URL(fileURLWithPath: path).deletingLastPathComponent().path
+        let existingPath = environment["PATH"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let basePath: String
+        if let existingPath, !existingPath.isEmpty {
+            basePath = existingPath
+        } else {
+            basePath = "/usr/bin:/bin:/usr/sbin:/sbin"
+        }
+        environment["PATH"] = "\(executableDirectory):\(basePath)"
+        return environment
+    }
+
+    private static func resolveVersionViaShell(
+        at path: String,
+        environment: [String: String]
+    ) -> String? {
+        for shellPath in shellCandidates(from: environment) {
+            guard testHooks.isExecutableFile(shellPath) else { continue }
+
+            let shellArg0 = URL(fileURLWithPath: shellPath).lastPathComponent
+            if let version = resolveVersion(
+                executablePath: shellPath,
+                arguments: ["-lc", "\"$1\" --version", shellArg0, path],
+                environment: environment
+            ) {
+                return version
+            }
+
+            if let version = resolveVersion(
+                executablePath: shellPath,
+                arguments: ["-ic", "\"$1\" --version", shellArg0, path],
+                environment: environment
+            ) {
+                return version
+            }
+        }
+
+        return nil
+    }
+
+    private static func resolveVersion(
+        executablePath: String,
+        arguments: [String],
+        environment: [String: String]
+    ) -> String? {
+        guard let output = testHooks.runProcess(executablePath, arguments, environment) else {
             return nil
         }
 
-        let components = output
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .split(whereSeparator: \.isWhitespace)
-        guard let version = components.first, !version.isEmpty else { return nil }
-        return String(version)
+        return extractVersion(from: output)
     }
 
     private static func defaultRunProcess(
         executablePath: String,
-        arguments: [String]
+        arguments: [String],
+        environment: [String: String]? = nil
     ) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = arguments
+        process.environment = environment
 
         let stdoutPipe = Pipe()
         process.standardOutput = stdoutPipe
