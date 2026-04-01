@@ -66,17 +66,18 @@ private struct AnthropicErrorDetail: Decodable {
     let message: String?
 }
 
-private enum ClaudeCLIResolver {
-    static func resolveUserAgent() -> String? {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let knownPaths = [
-            "\(home)/.local/bin/claude",
-            "\(home)/.claude/bin/claude",
-            "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude",
-        ]
+enum ClaudeCLIResolver {
+    struct TestHooks {
+        var environment: () -> [String: String]
+        var isExecutableFile: (String) -> Bool
+        var runProcess: (_ executablePath: String, _ arguments: [String]) -> String?
+    }
 
-        for claudePath in knownPaths where FileManager.default.isExecutableFile(atPath: claudePath) {
+    private static let commandTimeout: TimeInterval = 2
+    static var testHooks = makeDefaultTestHooks()
+
+    static func resolveUserAgent() -> String? {
+        for claudePath in knownExecutablePaths() {
             guard let version = resolveVersion(at: claudePath) else { continue }
             return "claude-code/\(version)"
         }
@@ -84,33 +85,147 @@ private enum ClaudeCLIResolver {
         return nil
     }
 
-    private static func resolveVersion(at path: String) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = ["--version"]
+    static func resetTestingHooks() {
+        testHooks = makeDefaultTestHooks()
+    }
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
+    private static func makeDefaultTestHooks() -> TestHooks {
+        TestHooks(
+            environment: { ProcessInfo.processInfo.environment },
+            isExecutableFile: { path in
+                FileManager.default.isExecutableFile(atPath: path)
+            },
+            runProcess: { executablePath, arguments in
+                defaultRunProcess(executablePath: executablePath, arguments: arguments)
+            }
+        )
+    }
+
+    private static func knownExecutablePaths() -> [String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let environment = testHooks.environment()
+        let explicitPaths = [
+            "\(home)/.local/bin/claude",
+            "\(home)/.claude/bin/claude",
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude",
+        ]
+        let pathDerivedCandidates = (environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map { "\($0)/claude" }
+        let shellResolvedPath = resolveCommandPathViaShell(environment: environment).map { [$0] } ?? []
+
+        var resolvedPaths: [String] = []
+        var seenPaths: Set<String> = []
+
+        for path in explicitPaths + pathDerivedCandidates + shellResolvedPath {
+            guard path.hasPrefix("/") else { continue }
+            guard !seenPaths.contains(path) else { continue }
+            guard testHooks.isExecutableFile(path) else { continue }
+            seenPaths.insert(path)
+            resolvedPaths.append(path)
+        }
+
+        return resolvedPaths
+    }
+
+    static func resolveCommandPathViaShell(environment: [String: String]) -> String? {
+        let shellCandidates = [environment["SHELL"], "/bin/zsh", "/bin/bash"].compactMap { $0 }
+        var seenShells: Set<String> = []
+
+        for shellPath in shellCandidates {
+            guard !seenShells.contains(shellPath) else { continue }
+            seenShells.insert(shellPath)
+
+            guard testHooks.isExecutableFile(shellPath) else { continue }
+            if let resolvedPath = resolveCommandPathViaShell(
+                executablePath: shellPath,
+                arguments: ["-lc", "command -v claude"]
+            ) {
+                return resolvedPath
+            }
+
+            // nvm commonly exposes claude from interactive rc files like .zshrc, not login-only startup files.
+            if let resolvedPath = resolveCommandPathViaShell(
+                executablePath: shellPath,
+                arguments: ["-ic", "command -v claude"]
+            ) {
+                return resolvedPath
+            }
+        }
+
+        return nil
+    }
+
+    private static func resolveCommandPathViaShell(
+        executablePath: String,
+        arguments: [String]
+    ) -> String? {
+        guard let output = testHooks.runProcess(executablePath, arguments) else {
+            return nil
+        }
+
+        guard let resolvedPath = extractExecutablePath(from: output) else {
+            return nil
+        }
+
+        guard testHooks.isExecutableFile(resolvedPath) else {
+            return nil
+        }
+
+        return resolvedPath
+    }
+
+    static func extractExecutablePath(from output: String) -> String? {
+        output
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { $0.hasPrefix("/") }
+    }
+
+    private static func resolveVersion(at path: String) -> String? {
+        guard let output = testHooks.runProcess(path, ["--version"]) else {
+            return nil
+        }
+
+        let components = output
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isWhitespace)
+        guard let version = components.first, !version.isEmpty else { return nil }
+        return String(version)
+    }
+
+    private static func defaultRunProcess(
+        executablePath: String,
+        arguments: [String]
+    ) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executablePath)
+        process.arguments = arguments
+
+        let stdoutPipe = Pipe()
+        process.standardOutput = stdoutPipe
         process.standardError = Pipe()
+
+        let completion = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in
+            completion.signal()
+        }
 
         do {
             try process.run()
-            let done = DispatchSemaphore(value: 0)
-            process.terminationHandler = { _ in done.signal() }
-            if done.wait(timeout: .now() + .seconds(2)) == .timedOut {
-                process.terminate()
-                return nil
-            }
-
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            guard let output = String(data: data, encoding: .utf8) else { return nil }
-            let components = output.trimmingCharacters(in: .whitespacesAndNewlines)
-                .components(separatedBy: " ")
-            guard let version = components.first, !version.isEmpty else { return nil }
-            return version
         } catch {
             return nil
         }
+
+        if completion.wait(timeout: .now() + commandTimeout) == .timedOut {
+            process.terminate()
+            return nil
+        }
+
+        let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+        guard let output = String(data: data, encoding: .utf8) else { return nil }
+        return output
     }
 }
 

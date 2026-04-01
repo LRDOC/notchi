@@ -87,6 +87,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
     override func tearDown() {
         AppSettings.isUsageEnabled = false
         AppSettings.claudeUsageRecoverySnapshot = nil
+        ClaudeCLIResolver.resetTestingHooks()
         super.tearDown()
     }
 
@@ -775,6 +776,152 @@ final class ClaudeUsageServiceTests: XCTestCase {
         XCTAssertFalse(service.isUsageStale)
         XCTAssertEqual(service.recoveryAction, .reconnect)
         XCTAssertTrue(scheduler.intervals.isEmpty)
+    }
+
+    func testShellResolverUsesLoginShellResultWithoutInteractiveFallback() {
+        var processCalls: [[String]] = []
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { [:] },
+            isExecutableFile: { path in
+                path == "/mock/zsh" || path == "/resolved/claude"
+            },
+            runProcess: { executablePath, arguments in
+                XCTAssertEqual(executablePath, "/mock/zsh")
+                processCalls.append(arguments)
+                if arguments == ["-lc", "command -v claude"] {
+                    return "/resolved/claude\n"
+                }
+                return nil
+            }
+        )
+
+        let resolvedPath = ClaudeCLIResolver.resolveCommandPathViaShell(environment: ["SHELL": "/mock/zsh"])
+
+        XCTAssertEqual(resolvedPath, "/resolved/claude")
+        XCTAssertEqual(processCalls, [["-lc", "command -v claude"]])
+    }
+
+    func testShellResolverFallsBackToInteractiveShellWhenLoginShellMisses() {
+        var processCalls: [[String]] = []
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { [:] },
+            isExecutableFile: { path in
+                path == "/mock/zsh" || path == "/resolved/claude"
+            },
+            runProcess: { executablePath, arguments in
+                XCTAssertEqual(executablePath, "/mock/zsh")
+                processCalls.append(arguments)
+                if arguments == ["-ic", "command -v claude"] {
+                    return "/resolved/claude\n"
+                }
+                return nil
+            }
+        )
+
+        let resolvedPath = ClaudeCLIResolver.resolveCommandPathViaShell(environment: ["SHELL": "/mock/zsh"])
+
+        XCTAssertEqual(resolvedPath, "/resolved/claude")
+        XCTAssertEqual(
+            processCalls,
+            [
+                ["-lc", "command -v claude"],
+                ["-ic", "command -v claude"],
+            ]
+        )
+    }
+
+    func testShellResolverIgnoresShellNoiseBeforeExecutablePath() {
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { [:] },
+            isExecutableFile: { path in
+                path == "/mock/zsh" || path == "/resolved/claude"
+            },
+            runProcess: { _, arguments in
+                if arguments == ["-lc", "command -v claude"] {
+                    return "nvm initialized\n /resolved/claude \n"
+                }
+                return nil
+            }
+        )
+
+        let resolvedPath = ClaudeCLIResolver.resolveCommandPathViaShell(environment: ["SHELL": "/mock/zsh"])
+
+        XCTAssertEqual(resolvedPath, "/resolved/claude")
+    }
+
+    func testShellResolverReturnsNilWhenNeitherModeFindsExecutablePath() {
+        var processCalls: [[String]] = []
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { [:] },
+            isExecutableFile: { path in
+                path == "/mock/zsh"
+            },
+            runProcess: { _, arguments in
+                processCalls.append(arguments)
+                return "claude not found\n"
+            }
+        )
+
+        let resolvedPath = ClaudeCLIResolver.resolveCommandPathViaShell(environment: ["SHELL": "/mock/zsh"])
+
+        XCTAssertNil(resolvedPath)
+        XCTAssertEqual(
+            processCalls,
+            [
+                ["-lc", "command -v claude"],
+                ["-ic", "command -v claude"],
+            ]
+        )
+    }
+
+    func testShellResolverFallsBackToDefaultShellsWhenSHELLIsUnset() {
+        var processCalls: [[String]] = []
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { [:] },
+            isExecutableFile: { path in
+                path == "/bin/zsh" || path == "/bin/bash" || path == "/resolved/claude"
+            },
+            runProcess: { executablePath, arguments in
+                processCalls.append([executablePath] + arguments)
+                if executablePath == "/bin/bash", arguments == ["-lc", "command -v claude"] {
+                    return "/resolved/claude\n"
+                }
+                return nil
+            }
+        )
+
+        let resolvedPath = ClaudeCLIResolver.resolveCommandPathViaShell(environment: [:])
+
+        XCTAssertEqual(resolvedPath, "/resolved/claude")
+        XCTAssertEqual(
+            processCalls,
+            [
+                ["/bin/zsh", "-lc", "command -v claude"],
+                ["/bin/zsh", "-ic", "command -v claude"],
+                ["/bin/bash", "-lc", "command -v claude"],
+            ]
+        )
+    }
+
+    func testResolveUserAgentUsesClaudeFromPATHBeforeShellFallback() {
+        var processCalls: [(String, [String])] = []
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { ["PATH": "/mock/bin"] },
+            isExecutableFile: { path in
+                path == "/mock/bin/claude"
+            },
+            runProcess: { executablePath, arguments in
+                processCalls.append((executablePath, arguments))
+                XCTAssertEqual(executablePath, "/mock/bin/claude")
+                XCTAssertEqual(arguments, ["--version"])
+                return "2.1.89 (Claude Code)\n"
+            }
+        )
+
+        let userAgent = ClaudeCLIResolver.resolveUserAgent()
+
+        XCTAssertEqual(userAgent, "claude-code/2.1.89")
+        XCTAssertEqual(processCalls.count, 1)
     }
 
     func testConnectAndStartPollingUsesSilentStoredTokenRecovery() async throws {
