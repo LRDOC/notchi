@@ -3,6 +3,10 @@ import os.log
 
 private let logger = Logger(subsystem: "com.ruban.notchi", category: "SessionStore")
 
+extension Notification.Name {
+    static let sessionStoreActiveSessionCountDidChange = Notification.Name("sessionStoreActiveSessionCountDidChange")
+}
+
 @MainActor
 @Observable
 final class SessionStore {
@@ -137,6 +141,7 @@ final class SessionStore {
         let session = SessionData(sessionId: sessionId, cwd: cwd, sessionNumber: sessionNumber, isInteractive: isInteractive, existingXPositions: existingXPositions)
         sessions[sessionId] = session
         logger.info("Created session #\(sessionNumber): \(sessionId, privacy: .public) at \(cwd, privacy: .public)")
+        postActiveSessionCountChange()
 
         if activeSessionCount == 1 {
             selectedSessionId = sessionId
@@ -150,6 +155,7 @@ final class SessionStore {
     private func removeSession(_ sessionId: String) {
         sessions.removeValue(forKey: sessionId)
         logger.info("Removed session: \(sessionId, privacy: .public)")
+        postActiveSessionCountChange()
 
         if selectedSessionId == sessionId {
             selectedSessionId = nil
@@ -163,6 +169,14 @@ final class SessionStore {
     func dismissSession(_ sessionId: String) {
         sessions[sessionId]?.endSession()
         removeSession(sessionId)
+    }
+
+    private func postActiveSessionCountChange() {
+        NotificationCenter.default.post(
+            name: .sessionStoreActiveSessionCountDidChange,
+            object: self,
+            userInfo: ["count": activeSessionCount]
+        )
     }
 
     private static func parseQuestions(from toolInput: [String: AnyCodable]?) -> [PendingQuestion] {

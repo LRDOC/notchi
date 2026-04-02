@@ -31,6 +31,8 @@ struct NotchContentView: View {
 
     private var notchSize: CGSize { panelManager.notchSize }
     private var isExpanded: Bool { panelManager.isExpanded }
+    private var collapsedMode: NotchPanelManager.CollapsedMode { panelManager.collapsedMode }
+    private var isCompactIdle: Bool { !isExpanded && collapsedMode == .compactIdle }
 
     private var panelAnimation: Animation {
         isExpanded
@@ -40,6 +42,10 @@ struct NotchContentView: View {
 
     private var sideWidth: CGFloat {
         max(0, notchSize.height - 12) + 24
+    }
+
+    private var compactContentWidth: CGFloat {
+        max(0, panelManager.compactNotchRect.width - (cornerRadiusInsets.closed.bottom * 2))
     }
 
     private var topCornerRadius: CGFloat {
@@ -130,6 +136,7 @@ struct NotchContentView: View {
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(panelAnimation, value: isExpanded)
+        .animation(.easeInOut(duration: 0.18), value: collapsedMode)
         .onReceive(NotificationCenter.default.publisher(for: .notchiShouldCollapse)) { _ in
             panelManager.collapse()
         }
@@ -241,15 +248,20 @@ struct NotchContentView: View {
 
     @ViewBuilder
     private var headerRow: some View {
-        HStack(spacing: 0) {
+        if isCompactIdle {
             Color.clear
-                .frame(width: notchSize.width - cornerRadiusInsets.closed.top)
+                .frame(width: compactContentWidth)
+        } else {
+            HStack(spacing: 0) {
+                Color.clear
+                    .frame(width: notchSize.width - cornerRadiusInsets.closed.top)
 
-            headerSprites
-                .offset(x: 15, y: -2)
-                .frame(width: sideWidth)
-                .opacity(isExpanded ? 0 : 1)
-                .animation(.none, value: isExpanded)
+                headerSprites
+                    .offset(x: 15, y: -2)
+                    .frame(width: sideWidth)
+                    .opacity(isExpanded ? 0 : 1)
+                    .animation(.none, value: isExpanded)
+            }
         }
     }
 

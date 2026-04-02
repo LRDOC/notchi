@@ -2,6 +2,7 @@ import ServiceManagement
 import SwiftUI
 
 struct PanelSettingsView: View {
+    @AppStorage(AppSettings.minimizeWhenIdleKey) private var minimizeWhenIdle = AppSettings.minimizeWhenIdle
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var hooksInstalled = HookInstaller.isInstalled()
     @State private var hooksError = false
@@ -56,6 +57,13 @@ struct PanelSettingsView: View {
             Button(action: toggleLaunchAtLogin) {
                 SettingsRowView(icon: "power", title: "Launch at Login") {
                     ToggleSwitch(isOn: launchAtLogin)
+                }
+            }
+            .buttonStyle(.plain)
+
+            Button(action: toggleMinimizeWhenIdle) {
+                SettingsRowView(icon: "pip.exit", title: "Minimize When Idle") {
+                    ToggleSwitch(isOn: minimizeWhenIdle)
                 }
             }
             .buttonStyle(.plain)
@@ -191,6 +199,10 @@ struct PanelSettingsView: View {
 
     private func connectUsage() {
         ClaudeUsageService.shared.connectAndStartPolling()
+    }
+
+    private func toggleMinimizeWhenIdle() {
+        minimizeWhenIdle.toggle()
     }
 
     private func handleUpdatesAction() {
