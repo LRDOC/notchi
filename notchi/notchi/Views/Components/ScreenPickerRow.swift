@@ -70,10 +70,10 @@ struct ScreenPickerRow: View {
                 }
             }
         }
-        .padding(.vertical, SettingsLayout.pickerVerticalPadding)
+        .padding(.vertical, SettingsLayout.pickerInset)
         .background(TerminalColors.subtleBackground)
         .cornerRadius(8)
-        .padding(.top, SettingsLayout.pickerTopPadding)
+        .padding(.top, SettingsLayout.pickerInset)
     }
 
     private func screenOptionRow(

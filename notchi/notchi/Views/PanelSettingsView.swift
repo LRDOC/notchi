@@ -25,11 +25,11 @@ struct PanelSettingsView: View {
         VStack(alignment: .leading, spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: SettingsLayout.sectionSpacing) {
-                    displaySection
+                    systemSection
                     Divider().background(Color.white.opacity(0.08))
-                    togglesSection
+                    aiSection
                     Divider().background(Color.white.opacity(0.08))
-                    actionsSection
+                    aboutSection
                 }
                 .padding(.top, SettingsLayout.topPadding)
             }
@@ -44,16 +44,12 @@ struct PanelSettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private var displaySection: some View {
+    private var systemSection: some View {
         VStack(alignment: .leading, spacing: SettingsLayout.sectionSpacing) {
             ScreenPickerRow(screenSelector: ScreenSelector.shared)
 
             SoundPickerView()
-        }
-    }
 
-    private var togglesSection: some View {
-        VStack(alignment: .leading, spacing: SettingsLayout.sectionSpacing) {
             Button(action: toggleLaunchAtLogin) {
                 SettingsRowView(icon: "power", title: "Launch at Login") {
                     ToggleSwitch(isOn: launchAtLogin)
@@ -67,7 +63,11 @@ struct PanelSettingsView: View {
                 }
             }
             .buttonStyle(.plain)
+        }
+    }
 
+    private var aiSection: some View {
+        VStack(alignment: .leading, spacing: SettingsLayout.sectionSpacing) {
             Button(action: installHooksIfNeeded) {
                 SettingsRowView(icon: "terminal", title: "Hooks") {
                     statusBadge(hookStatusText, color: hookStatusColor)
@@ -134,7 +134,7 @@ struct PanelSettingsView: View {
         AppSettings.anthropicApiKey = trimmed.isEmpty ? nil : trimmed
     }
 
-    private var actionsSection: some View {
+    private var aboutSection: some View {
         VStack(alignment: .leading, spacing: SettingsLayout.sectionSpacing) {
             Button(action: handleUpdatesAction) {
                 SettingsRowView(icon: "arrow.triangle.2.circlepath", title: "Check for Updates") {
@@ -176,12 +176,14 @@ struct PanelSettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, SettingsLayout.quitButtonVerticalPadding)
             .padding(.horizontal, SettingsLayout.quitButtonHorizontalPadding)
-            .background(TerminalColors.red.opacity(0.1))
+            .background {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(TerminalColors.red.opacity(0.1))
+                    .padding(.horizontal, -SettingsLayout.quitButtonHorizontalPadding)
+            }
             .contentShape(Rectangle())
-            .cornerRadius(8)
         }
         .buttonStyle(.plain)
-        .padding(.bottom, SettingsLayout.quitBottomPadding)
     }
 
     private func toggleLaunchAtLogin() {

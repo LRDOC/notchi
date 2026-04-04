@@ -52,12 +52,12 @@ struct SoundPickerView: View {
                     soundRow(sound)
                 }
             }
-            .padding(.vertical, SettingsLayout.pickerVerticalPadding)
+            .padding(.vertical, SettingsLayout.pickerInset)
         }
         .frame(height: selector.expandedHeight)
         .background(TerminalColors.subtleBackground)
         .cornerRadius(8)
-        .padding(.top, SettingsLayout.pickerTopPadding)
+        .padding(.top, SettingsLayout.pickerInset)
     }
 
     private func soundRow(_ sound: NotificationSound) -> some View {

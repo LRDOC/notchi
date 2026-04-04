@@ -12,9 +12,7 @@ enum SettingsLayout {
     static let fieldLeadingInset: CGFloat = 28
     static let quitButtonVerticalPadding: CGFloat = 8
     static let quitButtonHorizontalPadding: CGFloat = 4
-    static let quitBottomPadding: CGFloat = 0
-    static let pickerTopPadding: CGFloat = 6
-    static let pickerVerticalPadding: CGFloat = 6
+    static let pickerInset: CGFloat = 6
     static let pickerOptionHorizontalPadding: CGFloat = 10
     static let pickerOptionVerticalPadding: CGFloat = 5
 }
