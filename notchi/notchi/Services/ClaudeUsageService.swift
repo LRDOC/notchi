@@ -106,7 +106,7 @@ private func extractAbsolutePath(from output: String) -> String? {
     output
         .split(separator: "\n")
         .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-        .first { $0.hasPrefix("/") || $0.hasPrefix("~") }
+        .last { $0.hasPrefix("/") || $0.hasPrefix("~") }
 }
 
 enum ClaudeConfigDirectorySource: String {
@@ -118,6 +118,7 @@ enum ClaudeConfigDirectorySource: String {
 struct ClaudeConfigDirectoryResolution {
     let path: String
     let source: ClaudeConfigDirectorySource
+    let shouldCache: Bool
 
     var directoryURL: URL {
         URL(fileURLWithPath: path, isDirectory: true)
@@ -170,17 +171,27 @@ enum ClaudeConfigDirectoryResolver {
         let resolved: ClaudeConfigDirectoryResolution
 
         if let path = normalize(path: environment["CLAUDE_CONFIG_DIR"]) {
-            resolved = ClaudeConfigDirectoryResolution(path: path, source: .environment)
-        } else if let path = resolveViaShell(environment: environment) {
-            resolved = ClaudeConfigDirectoryResolution(path: path, source: .shell)
+            resolved = ClaudeConfigDirectoryResolution(path: path, source: .environment, shouldCache: true)
         } else {
-            let fallback = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent(".claude", isDirectory: true)
-                .path
-            resolved = ClaudeConfigDirectoryResolution(path: fallback, source: .fallback)
+            switch resolveViaShell(environment: environment) {
+            case .resolved(let path):
+                resolved = ClaudeConfigDirectoryResolution(path: path, source: .shell, shouldCache: true)
+            case .unset:
+                let fallback = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".claude", isDirectory: true)
+                    .path
+                resolved = ClaudeConfigDirectoryResolution(path: fallback, source: .fallback, shouldCache: true)
+            case .probeFailed:
+                let fallback = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".claude", isDirectory: true)
+                    .path
+                resolved = ClaudeConfigDirectoryResolution(path: fallback, source: .fallback, shouldCache: false)
+            }
         }
 
-        cachedResolution = resolved
+        if resolved.shouldCache {
+            cachedResolution = resolved
+        }
         return resolved
     }
 
@@ -206,30 +217,57 @@ enum ClaudeConfigDirectoryResolver {
         )
     }
 
-    private static func resolveViaShell(environment: [String: String]) -> String? {
+    private enum ShellResolution {
+        case resolved(String)
+        case unset
+        case probeFailed
+    }
+
+    private enum ShellProbeResult {
+        case resolved(String)
+        case unset
+        case failed
+    }
+
+    private static func resolveViaShell(environment: [String: String]) -> ShellResolution {
         let probeCommand = "printf '%s' \"$CLAUDE_CONFIG_DIR\""
+        var sawSuccessfulProbe = false
 
         for shellPath in shellCandidates(from: environment) {
             guard testHooks.isExecutableFile(shellPath) else { continue }
 
-            if let path = runShellProbe(executablePath: shellPath, arguments: ["-lc", probeCommand]) {
-                return path
+            switch runShellProbe(executablePath: shellPath, arguments: ["-lc", probeCommand]) {
+            case .resolved(let path):
+                return .resolved(path)
+            case .unset:
+                sawSuccessfulProbe = true
+            case .failed:
+                break
             }
 
-            if let path = runShellProbe(executablePath: shellPath, arguments: ["-ic", probeCommand]) {
-                return path
+            switch runShellProbe(executablePath: shellPath, arguments: ["-ic", probeCommand]) {
+            case .resolved(let path):
+                return .resolved(path)
+            case .unset:
+                sawSuccessfulProbe = true
+            case .failed:
+                break
             }
         }
 
-        return nil
+        return sawSuccessfulProbe ? .unset : .probeFailed
     }
 
-    private static func runShellProbe(executablePath: String, arguments: [String]) -> String? {
+    private static func runShellProbe(executablePath: String, arguments: [String]) -> ShellProbeResult {
         guard let output = testHooks.runProcess(executablePath, arguments, nil) else {
-            return nil
+            return .failed
         }
 
-        return normalize(path: extractAbsolutePath(from: output))
+        guard let path = normalize(path: extractAbsolutePath(from: output)) else {
+            return .unset
+        }
+
+        return .resolved(path)
     }
 
     private static func normalize(path rawPath: String?) -> String? {

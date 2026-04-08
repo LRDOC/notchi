@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate, SP
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
+        _ = ClaudeConfigDirectoryResolver.resolve()
         setupNotchWindow()
         observeScreenChanges()
         observeWakeNotifications()

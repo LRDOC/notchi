@@ -4,7 +4,7 @@ import os.log
 private let logger = Logger(subsystem: "com.ruban.notchi", category: "HookInstaller")
 
 struct HookInstaller {
-    static let hookCommand = "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/notchi-hook.sh"
+    static let hookCommand = "\"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/hooks/notchi-hook.sh\""
 
     @discardableResult
     static func installIfNeeded() -> Bool {
