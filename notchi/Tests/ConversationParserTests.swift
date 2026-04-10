@@ -48,6 +48,30 @@ final class ConversationParserTests: XCTestCase {
         XCTAssertEqual(result.messages.map(\.text), ["What's up?"])
     }
 
+    func testParseIncrementalReadsAssistantMessagesFromExplicitTranscriptPath() async throws {
+        let sessionId = "transcript-\(UUID().uuidString)"
+        let transcriptPath = tempDirectoryURL
+            .appendingPathComponent("\(UUID().uuidString).jsonl")
+            .path
+        let parser = ConversationParser.shared
+
+        let explicit = assistantLine(
+            uuid: "assistant-explicit",
+            text: "Hello from a custom transcript path",
+            model: "claude-opus-4-6"
+        )
+        FileManager.default.createFile(atPath: transcriptPath, contents: Data((explicit + "\n").utf8))
+
+        let result = await parser.parseIncremental(
+            sessionId: sessionId,
+            transcriptPath: transcriptPath
+        )
+        await parser.resetState(for: sessionId)
+
+        XCTAssertEqual(result.messages.map(\.text), ["Hello from a custom transcript path"])
+        XCTAssertFalse(result.interrupted)
+    }
+
     @MainActor
     func testSessionFilePathUsesConfiguredClaudeConfigDirectory() {
         let resolution = ClaudeConfigDirectoryResolution(
@@ -66,6 +90,24 @@ final class ConversationParserTests: XCTestCase {
             path,
             "/tmp/custom-claude-config/projects/-Users-ruban-Developer-GitHub-notchi/session-123.jsonl"
         )
+    }
+
+    func testResolvedTranscriptPathFallsBackToDerivedSessionPathWhenMissingOrEmpty() {
+        ConversationParser.projectsRootPath = "/tmp/config-projects"
+
+        let missing = ConversationParser.resolvedTranscriptPath(
+            sessionId: "session-123",
+            cwd: "/Users/ruban/Developer/GitHub/notchi",
+            transcriptPath: nil
+        )
+        let empty = ConversationParser.resolvedTranscriptPath(
+            sessionId: "session-123",
+            cwd: "/Users/ruban/Developer/GitHub/notchi",
+            transcriptPath: "   "
+        )
+
+        XCTAssertEqual(missing, "/tmp/config-projects/-Users-ruban-Developer-GitHub-notchi/session-123.jsonl")
+        XCTAssertEqual(empty, "/tmp/config-projects/-Users-ruban-Developer-GitHub-notchi/session-123.jsonl")
     }
 
     private func assistantLine(uuid: String, text: String, model: String) -> String {

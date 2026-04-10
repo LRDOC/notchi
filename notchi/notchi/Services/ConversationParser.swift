@@ -28,15 +28,30 @@ actor ConversationParser {
         projectsRootPath = claudeConfig.projectsDirectoryURL.path
     }
 
+    static func resolvedTranscriptPath(sessionId: String, cwd: String, transcriptPath: String?) -> String {
+        if let trimmedPath = transcriptPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmedPath.isEmpty {
+            return trimmedPath
+        }
+
+        return sessionFilePath(sessionId: sessionId, cwd: cwd)
+    }
+
     /// Parse only NEW assistant text messages since last call
     func parseIncremental(sessionId: String, cwd: String) -> ParseResult {
-        let sessionFile = Self.sessionFilePath(sessionId: sessionId, cwd: cwd)
+        parseIncremental(
+            sessionId: sessionId,
+            transcriptPath: Self.sessionFilePath(sessionId: sessionId, cwd: cwd)
+        )
+    }
 
-        guard FileManager.default.fileExists(atPath: sessionFile) else {
+    /// Parse only NEW assistant text messages since last call
+    func parseIncremental(sessionId: String, transcriptPath: String) -> ParseResult {
+        guard FileManager.default.fileExists(atPath: transcriptPath) else {
             return Self.emptyResult
         }
 
-        guard let fileHandle = FileHandle(forReadingAtPath: sessionFile) else {
+        guard let fileHandle = FileHandle(forReadingAtPath: transcriptPath) else {
             return Self.emptyResult
         }
         defer { try? fileHandle.close() }
@@ -166,9 +181,16 @@ actor ConversationParser {
     /// Mark current file position as "already processed"
     /// Call this when a new prompt is submitted to ignore previous content
     func markCurrentPosition(sessionId: String, cwd: String) {
-        let sessionFile = Self.sessionFilePath(sessionId: sessionId, cwd: cwd)
+        markCurrentPosition(
+            sessionId: sessionId,
+            transcriptPath: Self.sessionFilePath(sessionId: sessionId, cwd: cwd)
+        )
+    }
 
-        guard let fileHandle = FileHandle(forReadingAtPath: sessionFile) else {
+    /// Mark current file position as "already processed"
+    /// Call this when a new prompt is submitted to ignore previous content
+    func markCurrentPosition(sessionId: String, transcriptPath: String) {
+        guard let fileHandle = FileHandle(forReadingAtPath: transcriptPath) else {
             lastFileOffset[sessionId] = 0
             seenMessageIds[sessionId] = []
             return
