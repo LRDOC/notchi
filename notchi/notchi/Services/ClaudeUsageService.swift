@@ -20,6 +20,17 @@ struct ClaudeUsageRecoverySnapshot: Codable, Equatable {
     let oauthHeadersFallbackProbeUntil: Date?
     let isHeadersFallbackActive: Bool
     let lastGoodUsage: QuotaPeriod?
+    let lastGoodExtraUsage: ExtraUsage?
+    let lastObservedExtraUsageCredits: Double?
+    let extraUsageResetMarker: String?
+    let isUsingExtraUsage: Bool?
+}
+
+struct ClaudeExtraUsageObservation: Codable, Equatable {
+    let extraUsage: ExtraUsage?
+    let lastObservedExtraUsageCredits: Double?
+    let extraUsageResetMarker: String?
+    let isUsingExtraUsage: Bool
 }
 
 protocol ClaudeUsagePollTimer {
@@ -582,6 +593,8 @@ final class ClaudeUsageService {
     static let shared = ClaudeUsageService()
 
     var currentUsage: QuotaPeriod?
+    var currentExtraUsage: ExtraUsage?
+    var isUsingExtraUsage = false
     var isLoading = false
     var error: String?
     var statusMessage: String?
@@ -611,6 +624,8 @@ final class ClaudeUsageService {
     private var oauthHeadersFallbackProbeUntil: Date?
     private var isHeadersFallbackActive = false
     private var didAttemptHeadersFallbackInOAuthBackoff = false
+    private var lastObservedExtraUsageCredits: Double?
+    private var extraUsageResetMarker: String?
 
     init() {
         self.dependencies = .live
@@ -624,6 +639,7 @@ final class ClaudeUsageService {
         AppSettings.isUsageEnabled = true
         clearTransientState()
         clearOAuthBackoffState()
+        restorePersistedExtraUsageObservationIfNeeded()
         preferHeadersFallback = false
         oauthRecheckCounter = 0
         stopPolling()
@@ -703,6 +719,7 @@ final class ClaudeUsageService {
             AppSettings.isUsageEnabled = true
             cachedToken = resolution.token
 
+            restorePersistedExtraUsageObservationIfNeeded()
             restoreRecoverySnapshotIfNeeded()
 
             if isHeadersFallbackActive {
@@ -1140,6 +1157,10 @@ final class ClaudeUsageService {
             preferHeadersFallback = false
             clearTransientState()
             currentUsage = usageResponse.fiveHour
+            reconcileExtraUsageState(
+                with: usageResponse.extraUsage,
+                usage: usageResponse.fiveHour
+            )
             logger.info("Usage fetched via OAuth: \(self.currentUsage?.usagePercentage ?? 0)%")
             schedulePollTimer()
             return .success
@@ -1230,6 +1251,7 @@ final class ClaudeUsageService {
             let usage = QuotaPeriod(utilization: (utilization * 100).rounded(), resetDate: resetDate)
             isConnected = true
             currentUsage = usage
+            reconcileExtraUsageStateForHeaders(using: usage)
 
             switch context {
             case .activeFallbackRefresh:
@@ -1542,6 +1564,66 @@ final class ClaudeUsageService {
         recoveryAction = .none
     }
 
+    private func reconcileExtraUsageState(
+        with extraUsage: ExtraUsage?,
+        usage: QuotaPeriod?
+    ) {
+        synchronizeExtraUsageWindow(with: usage)
+        currentExtraUsage = extraUsage
+        let isAtQuota = (usage?.usagePercentage ?? 0) >= 100
+
+        guard let extraUsage else {
+            if !isAtQuota {
+                isUsingExtraUsage = false
+            }
+            lastObservedExtraUsageCredits = nil
+            persistExtraUsageObservationIfNeeded()
+            return
+        }
+
+        guard extraUsage.isEnabled else {
+            isUsingExtraUsage = false
+            lastObservedExtraUsageCredits = extraUsage.usedCredits
+            persistExtraUsageObservationIfNeeded()
+            return
+        }
+
+        if !isAtQuota {
+            isUsingExtraUsage = false
+        } else {
+            // OAuth responses expose extra_usage directly, so a 100% window
+            // with extra usage enabled should present the same state as the
+            // headers fallback path.
+            isUsingExtraUsage = true
+        }
+
+        lastObservedExtraUsageCredits = extraUsage.usedCredits
+
+        persistExtraUsageObservationIfNeeded()
+    }
+
+    private func reconcileExtraUsageStateForHeaders(using usage: QuotaPeriod?) {
+        synchronizeExtraUsageWindow(with: usage)
+        let isAtQuota = (usage?.usagePercentage ?? 0) >= 100
+
+        // Headers fallback does not expose the extra_usage object, so once
+        // we're limited to unified rate-limit headers we treat 100% usage as
+        // extra usage to match Claude Code's visible state more closely.
+        isUsingExtraUsage = isAtQuota
+
+        persistExtraUsageObservationIfNeeded()
+    }
+
+    private func synchronizeExtraUsageWindow(with usage: QuotaPeriod?) {
+        let nextResetMarker = usage?.resetsAt
+        if let previousResetMarker = extraUsageResetMarker,
+           let nextResetMarker,
+           previousResetMarker != nextResetMarker {
+            isUsingExtraUsage = false
+        }
+        extraUsageResetMarker = nextResetMarker
+    }
+
     private func clearPendingResumeReconnect() {
         pendingResumeReconnectTimer?.invalidate()
         pendingResumeReconnectTimer = nil
@@ -1729,6 +1811,10 @@ final class ClaudeUsageService {
         }
 
         currentUsage = isUsageStillValid(snapshot.lastGoodUsage, now: now) ? snapshot.lastGoodUsage : nil
+        currentExtraUsage = snapshot.lastGoodExtraUsage
+        lastObservedExtraUsageCredits = snapshot.lastObservedExtraUsageCredits
+        extraUsageResetMarker = snapshot.extraUsageResetMarker
+        isUsingExtraUsage = snapshot.isUsingExtraUsage ?? false
         oauthBackoffUntil = hasActiveOAuthBackoff ? snapshot.oauthBackoffUntil : nil
         oauthHeadersFallbackProbeUntil = hasActiveHeadersFallback ? snapshot.oauthHeadersFallbackProbeUntil : nil
         isHeadersFallbackActive = hasActiveHeadersFallback
@@ -1741,6 +1827,22 @@ final class ClaudeUsageService {
         } else if hasActiveOAuthBackoff {
             logger.info("Restored OAuth recovery window from persistence")
         }
+    }
+
+    private func restorePersistedExtraUsageObservationIfNeeded() {
+        guard let observation = AppSettings.claudeExtraUsageObservation else {
+            return
+        }
+
+        guard isExtraUsageWindowStillValid(resetMarker: observation.extraUsageResetMarker, now: dependencies.now()) else {
+            AppSettings.claudeExtraUsageObservation = nil
+            return
+        }
+
+        currentExtraUsage = observation.extraUsage
+        lastObservedExtraUsageCredits = observation.lastObservedExtraUsageCredits
+        extraUsageResetMarker = observation.extraUsageResetMarker
+        isUsingExtraUsage = observation.isUsingExtraUsage
     }
 
     private func persistRecoverySnapshotIfNeeded() {
@@ -1762,8 +1864,44 @@ final class ClaudeUsageService {
             oauthBackoffUntil: oauthBackoffUntil,
             oauthHeadersFallbackProbeUntil: oauthHeadersFallbackProbeUntil,
             isHeadersFallbackActive: isHeadersFallbackActive,
-            lastGoodUsage: usageToPersist
+            lastGoodUsage: usageToPersist,
+            lastGoodExtraUsage: currentExtraUsage,
+            lastObservedExtraUsageCredits: lastObservedExtraUsageCredits,
+            extraUsageResetMarker: extraUsageResetMarker,
+            isUsingExtraUsage: isUsingExtraUsage
         )
+    }
+
+    private func persistExtraUsageObservationIfNeeded() {
+        guard let observation = makeExtraUsageObservation() else {
+            AppSettings.claudeExtraUsageObservation = nil
+            return
+        }
+
+        AppSettings.claudeExtraUsageObservation = observation
+    }
+
+    private func makeExtraUsageObservation() -> ClaudeExtraUsageObservation? {
+        guard isExtraUsageWindowStillValid(resetMarker: extraUsageResetMarker, now: dependencies.now()),
+              currentExtraUsage != nil || lastObservedExtraUsageCredits != nil || isUsingExtraUsage else {
+            return nil
+        }
+
+        return ClaudeExtraUsageObservation(
+            extraUsage: currentExtraUsage,
+            lastObservedExtraUsageCredits: lastObservedExtraUsageCredits,
+            extraUsageResetMarker: extraUsageResetMarker,
+            isUsingExtraUsage: isUsingExtraUsage
+        )
+    }
+
+    private func isExtraUsageWindowStillValid(resetMarker: String?, now: Date) -> Bool {
+        guard let resetMarker else {
+            return false
+        }
+
+        let resetDate = Self.isoFractional.date(from: resetMarker) ?? Self.isoBasic.date(from: resetMarker)
+        return resetDate.map { $0 > now } ?? false
     }
 
     private func isUsageStillValid(_ usage: QuotaPeriod?, now: Date) -> Bool {

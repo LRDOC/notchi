@@ -284,6 +284,7 @@ struct ExpandedPanelView: View {
     private var sharedUsageBar: some View {
         UsageBarView(
             usage: usageService.currentUsage,
+            isUsingExtraUsage: usageService.isUsingExtraUsage,
             isLoading: usageService.isLoading,
             error: usageService.error,
             statusMessage: usageService.statusMessage,

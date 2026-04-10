@@ -93,6 +93,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
     override func tearDown() {
         AppSettings.isUsageEnabled = false
         AppSettings.claudeUsageRecoverySnapshot = nil
+        AppSettings.claudeExtraUsageObservation = nil
         ClaudeConfigDirectoryResolver.resetTestingHooks()
         ClaudeCLIResolver.resetTestingHooks()
         super.tearDown()
@@ -2445,17 +2446,29 @@ final class ClaudeUsageServiceTests: XCTestCase {
         )
     }
 
-    private func makeSuccessPayload(utilization: Double) -> Data {
-        let json = """
-        {
-          "five_hour": {
-            "utilization": \(utilization),
-            "resets_at": "2099-01-01T01:00:00Z"
-          },
-          "seven_day": null
+    private func makeSuccessPayload(
+        utilization: Double,
+        resetAt: String = "2099-01-01T01:00:00Z",
+        extraUsage: ExtraUsage? = nil
+    ) -> Data {
+        var payload: [String: Any] = [
+            "five_hour": [
+                "utilization": utilization,
+                "resets_at": resetAt,
+            ],
+            "seven_day": NSNull(),
+        ]
+
+        if let extraUsage {
+            payload["extra_usage"] = [
+                "is_enabled": extraUsage.isEnabled,
+                "monthly_limit": extraUsage.monthlyLimit.map { $0 as Any } ?? NSNull(),
+                "used_credits": extraUsage.usedCredits.map { $0 as Any } ?? NSNull(),
+                "utilization": extraUsage.utilization.map { $0 as Any } ?? NSNull(),
+            ]
         }
-        """
-        return Data(json.utf8)
+
+        return try! JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
     }
 
     // MARK: - Enterprise Headers Fallback
@@ -2974,6 +2987,189 @@ final class ClaudeUsageServiceTests: XCTestCase {
         XCTAssertEqual(service.currentUsage?.usagePercentage, 75)
     }
 
+    func testOAuthShowsExtraUsageWhenQuotaIsMaxedAndEnabled() async throws {
+        let scheduler = PollSchedulerSpy()
+        let dependencies = makeDependencies(
+            scheduler: scheduler,
+            resolveUserAgent: { "claude-code/2.1.77" },
+            fetchUsage: { _ in
+                (
+                    self.makeSuccessPayload(
+                        utilization: 100,
+                        extraUsage: .init(isEnabled: true, monthlyLimit: 2000, usedCredits: 313, utilization: 15.65)
+                    ),
+                    self.makeResponse(statusCode: 200)
+                )
+            }
+        )
+
+        let service = ClaudeUsageService(dependencies: dependencies)
+        await service.performFetch(with: "token")
+        XCTAssertTrue(service.isUsingExtraUsage)
+        XCTAssertEqual(service.currentExtraUsage?.usedCredits, 313)
+    }
+
+    func testOAuthExtraUsageLatchResetsWhenUsageWindowChanges() async throws {
+        let scheduler = PollSchedulerSpy()
+        var call = 0
+        let dependencies = makeDependencies(
+            scheduler: scheduler,
+            resolveUserAgent: { "claude-code/2.1.77" },
+            fetchUsage: { _ in
+                call += 1
+                let payload: Data
+                switch call {
+                case 1:
+                    payload = self.makeSuccessPayload(
+                        utilization: 100,
+                        resetAt: "2099-01-01T01:00:00Z",
+                        extraUsage: .init(isEnabled: true, monthlyLimit: 2000, usedCredits: 313, utilization: 15.65)
+                    )
+                case 2:
+                    payload = self.makeSuccessPayload(
+                        utilization: 100,
+                        resetAt: "2099-01-01T01:00:00Z",
+                        extraUsage: .init(isEnabled: true, monthlyLimit: 2000, usedCredits: 314, utilization: 15.7)
+                    )
+                default:
+                    payload = self.makeSuccessPayload(
+                        utilization: 12,
+                        resetAt: "2099-01-01T06:00:00Z",
+                        extraUsage: .init(isEnabled: true, monthlyLimit: 2000, usedCredits: 314, utilization: 15.7)
+                    )
+                }
+                return (payload, self.makeResponse(statusCode: 200))
+            }
+        )
+
+        let service = ClaudeUsageService(dependencies: dependencies)
+        await service.performFetch(with: "token")
+        await service.performFetch(with: "token")
+        XCTAssertTrue(service.isUsingExtraUsage)
+
+        await service.performFetch(with: "token")
+        XCTAssertFalse(service.isUsingExtraUsage)
+    }
+
+    func testStartPollingRestoresPersistedExtraUsageObservationForCurrentWindow() async throws {
+        let scheduler = PollSchedulerSpy()
+        let resetAt = "2099-01-01T01:00:00Z"
+        AppSettings.claudeExtraUsageObservation = ClaudeExtraUsageObservation(
+            extraUsage: .init(isEnabled: true, monthlyLimit: 2000, usedCredits: 313, utilization: 15.65),
+            lastObservedExtraUsageCredits: 313,
+            extraUsageResetMarker: resetAt,
+            isUsingExtraUsage: true
+        )
+
+        let dependencies = makeDependencies(
+            scheduler: scheduler,
+            resolveUserAgent: { "claude-code/2.1.77" },
+            getCachedOAuthToken: { _ in "cached-token" },
+            fetchUsage: { request in
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer cached-token")
+                return (
+                    self.makeSuccessPayload(
+                        utilization: 100,
+                        resetAt: resetAt,
+                        extraUsage: .init(isEnabled: true, monthlyLimit: 2000, usedCredits: 313, utilization: 15.65)
+                    ),
+                    self.makeResponse(statusCode: 200)
+                )
+            }
+        )
+
+        let service = ClaudeUsageService(dependencies: dependencies)
+        AppSettings.isUsageEnabled = true
+        service.startPolling()
+        await Task.yield()
+        await Task.yield()
+
+        XCTAssertEqual(service.currentUsage?.usagePercentage, 100)
+        XCTAssertEqual(service.currentExtraUsage?.usedCredits, 313)
+        XCTAssertTrue(service.isUsingExtraUsage)
+    }
+
+    func testHeadersFallbackClearsExtraUsageLatchWhenUsageDropsBelowQuota() async throws {
+        let scheduler = PollSchedulerSpy()
+        var oauthCall = 0
+        let dependencies = makeDependencies(
+            scheduler: scheduler,
+            resolveUserAgent: { "claude-code/2.1.77" },
+            fetchUsage: { request in
+                let path = request.url?.path ?? ""
+                if path == "/api/oauth/usage" {
+                    oauthCall += 1
+                    switch oauthCall {
+                    case 1:
+                        return (
+                            self.makeSuccessPayload(
+                                utilization: 100,
+                                extraUsage: .init(isEnabled: true, monthlyLimit: 2000, usedCredits: 313, utilization: 15.65)
+                            ),
+                            self.makeResponse(statusCode: 200)
+                        )
+                    case 2:
+                        return (
+                            self.makeSuccessPayload(
+                                utilization: 100,
+                                extraUsage: .init(isEnabled: true, monthlyLimit: 2000, usedCredits: 314, utilization: 15.7)
+                            ),
+                            self.makeResponse(statusCode: 200)
+                        )
+                    default:
+                        return (Data(), self.makeResponse(statusCode: 403))
+                    }
+                }
+
+                return (
+                    Data(),
+                    self.makeHeadersResponse(
+                        utilization: "0.60",
+                        reset: "2099-01-01T01:00:00Z"
+                    )
+                )
+            }
+        )
+
+        let service = ClaudeUsageService(dependencies: dependencies)
+        await service.performFetch(with: "token")
+        await service.performFetch(with: "token")
+        XCTAssertTrue(service.isUsingExtraUsage)
+
+        await service.performFetch(with: "token")
+
+        XCTAssertEqual(service.currentUsage?.usagePercentage, 60)
+        XCTAssertFalse(service.isUsingExtraUsage)
+    }
+
+    func testHeadersFallbackShowsExtraUsageWhenQuotaIsMaxed() async throws {
+        let scheduler = PollSchedulerSpy()
+        let dependencies = makeDependencies(
+            scheduler: scheduler,
+            resolveUserAgent: { "claude-code/2.1.77" },
+            fetchUsage: { request in
+                let path = request.url?.path ?? ""
+                if path == "/api/oauth/usage" {
+                    return (Data(), self.makeResponse(statusCode: 429))
+                }
+
+                return (
+                    Data(),
+                    self.makeHeadersResponse(
+                        utilization: "1.0",
+                        reset: "2099-01-01T01:00:00Z"
+                    )
+                )
+            }
+        )
+
+        let service = ClaudeUsageService(dependencies: dependencies)
+        await service.performFetch(with: "token")
+
+        XCTAssertEqual(service.currentUsage?.usagePercentage, 100)
+        XCTAssertTrue(service.isUsingExtraUsage)
+    }
+
     func testOAuth403ThenHeadersNetworkErrorShowsFallbackError() async throws {
         let scheduler = PollSchedulerSpy()
         let dependencies = makeDependencies(
@@ -3076,13 +3272,21 @@ final class ClaudeUsageServiceTests: XCTestCase {
         oauthBackoffUntil: Date? = nil,
         oauthHeadersFallbackProbeUntil: Date? = nil,
         isHeadersFallbackActive: Bool = false,
-        lastGoodUsage: QuotaPeriod? = nil
+        lastGoodUsage: QuotaPeriod? = nil,
+        lastGoodExtraUsage: ExtraUsage? = nil,
+        lastObservedExtraUsageCredits: Double? = nil,
+        extraUsageResetMarker: String? = nil,
+        isUsingExtraUsage: Bool? = nil
     ) -> ClaudeUsageRecoverySnapshot {
         ClaudeUsageRecoverySnapshot(
             oauthBackoffUntil: oauthBackoffUntil,
             oauthHeadersFallbackProbeUntil: oauthHeadersFallbackProbeUntil,
             isHeadersFallbackActive: isHeadersFallbackActive,
-            lastGoodUsage: lastGoodUsage
+            lastGoodUsage: lastGoodUsage,
+            lastGoodExtraUsage: lastGoodExtraUsage,
+            lastObservedExtraUsageCredits: lastObservedExtraUsageCredits,
+            extraUsageResetMarker: extraUsageResetMarker,
+            isUsingExtraUsage: isUsingExtraUsage
         )
     }
 
