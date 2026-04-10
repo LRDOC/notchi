@@ -14,7 +14,6 @@ struct PendingQuestion {
 final class SessionData: Identifiable {
     let id: String
     let cwd: String
-    let sessionNumber: Int
     let sessionStartTime: Date
     let spriteXPosition: CGFloat
     let spriteYOffset: CGFloat
@@ -33,6 +32,7 @@ final class SessionData: Identifiable {
     private(set) var promptSubmitTime: Date?
     private(set) var permissionMode: String = "default"
     private(set) var pendingQuestions: [PendingQuestion] = []
+    private(set) var currentSpinnerVerb: String = SpinnerVerbs.randomWorkingVerb()
 
     private var durationTimer: Task<Void, Never>?
     private var sleepTimer: Task<Void, Never>?
@@ -56,14 +56,6 @@ final class SessionData: Identifiable {
         }
     }
 
-    var displayTitle: String {
-        let title = "\(projectName) #\(sessionNumber)"
-        if let prompt = lastUserPrompt {
-            return "\(title) - \(prompt)"
-        }
-        return title
-    }
-
     var activityPreview: String? {
         if let lastEvent = recentEvents.last {
             return lastEvent.description ?? lastEvent.tool ?? lastEvent.type
@@ -84,10 +76,9 @@ final class SessionData: Identifiable {
     private static let yOffsetBase: CGFloat = -5.0
     private static let yOffsetRange: UInt = 51
 
-    init(sessionId: String, cwd: String, sessionNumber: Int, isInteractive: Bool = true, existingXPositions: [CGFloat] = []) {
+    init(sessionId: String, cwd: String, isInteractive: Bool = true, existingXPositions: [CGFloat] = []) {
         self.id = sessionId
         self.cwd = cwd
-        self.sessionNumber = sessionNumber
         self.isInteractive = isInteractive
         self.sessionStartTime = Date()
         self.lastActivity = Date()
@@ -100,16 +91,42 @@ final class SessionData: Identifiable {
     }
 
     private static func resolveXPosition(hash: UInt, existingPositions: [CGFloat]) -> CGFloat {
-        var candidate = xPositionMin + CGFloat(hash % 900) / 1000.0
+        let initialCandidate = xPositionMin + CGFloat(hash % 900) / 1000.0
+        var bestCandidate = initialCandidate
+        var bestMinimumSeparation = minimumSeparation(for: initialCandidate, existingPositions: existingPositions)
 
-        for _ in 0..<xCollisionRetries {
-            let tooClose = existingPositions.contains { abs($0 - candidate) < xMinSeparation }
-            if !tooClose { break }
-            candidate = (candidate + xNudgeStep).truncatingRemainder(dividingBy: xPositionRange) + xPositionMin
+        for attempt in 0...xCollisionRetries {
+            let candidate = wrappedXPosition(initialCandidate + (CGFloat(attempt) * xNudgeStep))
+            let minimumSeparation = minimumSeparation(for: candidate, existingPositions: existingPositions)
+
+            if minimumSeparation >= xMinSeparation {
+                return candidate
+            }
+
+            if minimumSeparation > bestMinimumSeparation {
+                bestCandidate = candidate
+                bestMinimumSeparation = minimumSeparation
+            }
         }
 
-        return candidate
+        return bestCandidate
     }
+
+    private static func wrappedXPosition(_ value: CGFloat) -> CGFloat {
+        let offset = (value - xPositionMin).truncatingRemainder(dividingBy: xPositionRange)
+        let normalizedOffset = offset >= 0 ? offset : offset + xPositionRange
+        return normalizedOffset + xPositionMin
+    }
+
+    private static func minimumSeparation(for candidate: CGFloat, existingPositions: [CGFloat]) -> CGFloat {
+        existingPositions.map { abs($0 - candidate) }.min() ?? .greatestFiniteMagnitude
+    }
+
+#if DEBUG
+    static func resolveXPositionForTesting(hash: UInt, existingPositions: [CGFloat]) -> CGFloat {
+        resolveXPosition(hash: hash, existingPositions: existingPositions)
+    }
+#endif
 
     private static func resolveYOffset(hash: UInt) -> CGFloat {
         let yBits = (hash >> 8) & 0xFF
@@ -132,6 +149,10 @@ final class SessionData: Identifiable {
         promptSubmitTime = now
         lastActivity = now
         logger.debug("Setting promptSubmitTime to: \(now)")
+    }
+
+    func advanceSpinnerVerbForReply() {
+        currentSpinnerVerb = SpinnerVerbs.nextWorkingVerb(after: currentSpinnerVerb)
     }
 
     func updatePermissionMode(_ mode: String) {
@@ -193,6 +214,10 @@ final class SessionData: Identifiable {
 
     func clearAssistantMessages() {
         recentAssistantMessages = []
+    }
+
+    func clearRecentEvents() {
+        recentEvents = []
     }
 
     func resetSleepTimer() {

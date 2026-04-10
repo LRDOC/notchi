@@ -3,6 +3,10 @@ import os.log
 
 private let logger = Logger(subsystem: "com.ruban.notchi", category: "SessionStore")
 
+extension Notification.Name {
+    static let sessionStoreActiveSessionCountDidChange = Notification.Name("sessionStoreActiveSessionCountDidChange")
+}
+
 @MainActor
 @Observable
 final class SessionStore {
@@ -10,7 +14,7 @@ final class SessionStore {
 
     private(set) var sessions: [String: SessionData] = [:]
     private(set) var selectedSessionId: String?
-    private var nextSessionNumberByProject: [String: Int] = [:]
+    private var displaySessionNumbersById: [String: Int] = [:]
 
     private init() {}
 
@@ -65,11 +69,13 @@ final class SessionStore {
             if let prompt = event.userPrompt {
                 session.recordUserPrompt(prompt)
             }
+            session.clearRecentEvents()
             session.clearAssistantMessages()
             session.clearPendingQuestions()
             if Self.isLocalSlashCommand(event.userPrompt) {
                 session.updateTask(.idle)
             } else {
+                session.advanceSpinnerVerbForReply()
                 session.updateTask(.working)
             }
 
@@ -125,18 +131,33 @@ final class SessionStore {
         session.recordAssistantMessages(messages)
     }
 
+    func displaySessionNumber(for session: SessionData) -> Int {
+        displaySessionNumbersById[session.id] ?? 1
+    }
+
+    func displaySessionLabel(for session: SessionData) -> String {
+        "\(session.projectName) #\(displaySessionNumber(for: session))"
+    }
+
+    func displayTitle(for session: SessionData) -> String {
+        let label = displaySessionLabel(for: session)
+        if let prompt = session.lastUserPrompt {
+            return "\(label) - \(prompt)"
+        }
+        return label
+    }
+
     private func getOrCreateSession(sessionId: String, cwd: String, isInteractive: Bool) -> SessionData {
         if let existing = sessions[sessionId] {
             return existing
         }
 
-        let projectName = (cwd as NSString).lastPathComponent
-        let sessionNumber = nextSessionNumberByProject[projectName, default: 0] + 1
-        nextSessionNumberByProject[projectName] = sessionNumber
         let existingXPositions = sessions.values.map(\.spriteXPosition)
-        let session = SessionData(sessionId: sessionId, cwd: cwd, sessionNumber: sessionNumber, isInteractive: isInteractive, existingXPositions: existingXPositions)
+        let session = SessionData(sessionId: sessionId, cwd: cwd, isInteractive: isInteractive, existingXPositions: existingXPositions)
         sessions[sessionId] = session
-        logger.info("Created session #\(sessionNumber): \(sessionId, privacy: .public) at \(cwd, privacy: .public)")
+        recomputeDisplaySessionNumbers()
+        logger.info("Created session #\(self.displaySessionNumber(for: session)): \(sessionId, privacy: .public) at \(cwd, privacy: .public)")
+        postActiveSessionCountChange()
 
         if activeSessionCount == 1 {
             selectedSessionId = sessionId
@@ -149,7 +170,9 @@ final class SessionStore {
 
     private func removeSession(_ sessionId: String) {
         sessions.removeValue(forKey: sessionId)
+        recomputeDisplaySessionNumbers()
         logger.info("Removed session: \(sessionId, privacy: .public)")
+        postActiveSessionCountChange()
 
         if selectedSessionId == sessionId {
             selectedSessionId = nil
@@ -163,6 +186,33 @@ final class SessionStore {
     func dismissSession(_ sessionId: String) {
         sessions[sessionId]?.endSession()
         removeSession(sessionId)
+    }
+
+    private func postActiveSessionCountChange() {
+        NotificationCenter.default.post(
+            name: .sessionStoreActiveSessionCountDidChange,
+            object: self
+        )
+    }
+
+    private func recomputeDisplaySessionNumbers() {
+        let groupedSessions = Dictionary(grouping: sessions.values, by: \.projectName)
+        var displayNumbers: [String: Int] = [:]
+
+        for projectSessions in groupedSessions.values {
+            let orderedSessions = projectSessions.sorted { lhs, rhs in
+                if lhs.sessionStartTime != rhs.sessionStartTime {
+                    return lhs.sessionStartTime < rhs.sessionStartTime
+                }
+                return lhs.id < rhs.id
+            }
+
+            for (index, session) in orderedSessions.enumerated() {
+                displayNumbers[session.id] = index + 1
+            }
+        }
+
+        displaySessionNumbersById = displayNumbers
     }
 
     private static func parseQuestions(from toolInput: [String: AnyCodable]?) -> [PendingQuestion] {

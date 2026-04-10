@@ -2,7 +2,7 @@ import Foundation
 
 struct HookEvent: Decodable, Sendable {
     let sessionId: String
-    let transcriptPath: String
+    let transcriptPath: String?
     let cwd: String
     let event: String
     let status: String

@@ -77,7 +77,7 @@ final class UsageBarViewTests: XCTestCase {
             usage: QuotaPeriod(utilization: 42, resetDate: Date(timeIntervalSince1970: 4_102_444_800)),
             isLoading: false,
             error: nil,
-            statusMessage: "Start Claude Code to refresh credentials",
+            statusMessage: "Start Claude Code to track usage",
             isStale: true,
             recoveryAction: .waitForClaudeCode,
             isEnabled: true
@@ -121,7 +121,7 @@ final class UsageBarViewTests: XCTestCase {
         let view = UsageBarView(
             usage: nil,
             isLoading: false,
-            error: "Start Claude Code to refresh credentials",
+            error: "Start Claude Code to track usage",
             statusMessage: nil,
             isStale: false,
             recoveryAction: .waitForClaudeCode,

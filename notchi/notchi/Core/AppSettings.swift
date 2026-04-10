@@ -1,6 +1,8 @@
 import Foundation
 
 struct AppSettings {
+    static let hideSpriteWhenIdleKey = "hideSpriteWhenIdle"
+
     private static let notificationSoundKey = "notificationSound"
     private static let isMutedKey = "isMuted"
     private static let previousSoundKey = "previousNotificationSound"
@@ -10,6 +12,11 @@ struct AppSettings {
     static var isUsageEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: isUsageEnabledKey) }
         set { UserDefaults.standard.set(newValue, forKey: isUsageEnabledKey) }
+    }
+
+    static var hideSpriteWhenIdle: Bool {
+        get { UserDefaults.standard.bool(forKey: hideSpriteWhenIdleKey) }
+        set { UserDefaults.standard.set(newValue, forKey: hideSpriteWhenIdleKey) }
     }
 
     static var claudeUsageRecoverySnapshot: ClaudeUsageRecoverySnapshot? {

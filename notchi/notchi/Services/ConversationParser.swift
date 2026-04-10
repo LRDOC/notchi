@@ -15,11 +15,35 @@ struct ParseResult {
 
 actor ConversationParser {
     static let shared = ConversationParser()
+    static let defaultProjectsRootPath = "\(NSHomeDirectory())/.claude/projects"
+    static var projectsRootPath = defaultProjectsRootPath
 
     private var lastFileOffset: [String: UInt64] = [:]
     private var seenMessageIds: [String: Set<String>] = [:]
 
     private static let emptyResult = ParseResult(messages: [], interrupted: false)
+
+    @MainActor
+    static func configureProjectsRootPath(using claudeConfig: ClaudeConfigDirectoryResolution) {
+        projectsRootPath = claudeConfig.projectsDirectoryURL.path
+    }
+
+    static func resolvedTranscriptPath(sessionId: String, cwd: String, transcriptPath: String?) -> String {
+        if let trimmedPath = transcriptPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmedPath.isEmpty {
+            return trimmedPath
+        }
+
+        return sessionFilePath(sessionId: sessionId, cwd: cwd)
+    }
+
+    /// Parse only NEW assistant text messages since last call
+    func parseIncremental(sessionId: String, cwd: String) -> ParseResult {
+        parseIncremental(
+            sessionId: sessionId,
+            transcriptPath: Self.sessionFilePath(sessionId: sessionId, cwd: cwd)
+        )
+    }
 
     /// Parse only NEW assistant text messages since last call
     func parseIncremental(sessionId: String, transcriptPath: String) -> ParseResult {
@@ -92,6 +116,9 @@ actor ConversationParser {
 
             guard let messageDict = json["message"] as? [String: Any] else { continue }
 
+            // Skip CLI-generated transcript entries that are not real model replies.
+            if messageDict["model"] as? String == "<synthetic>" { continue }
+
             // Parse timestamp
             let timestamp: Date
             if let timestampStr = json["timestamp"] as? String {
@@ -153,6 +180,15 @@ actor ConversationParser {
 
     /// Mark current file position as "already processed"
     /// Call this when a new prompt is submitted to ignore previous content
+    func markCurrentPosition(sessionId: String, cwd: String) {
+        markCurrentPosition(
+            sessionId: sessionId,
+            transcriptPath: Self.sessionFilePath(sessionId: sessionId, cwd: cwd)
+        )
+    }
+
+    /// Mark current file position as "already processed"
+    /// Call this when a new prompt is submitted to ignore previous content
     func markCurrentPosition(sessionId: String, transcriptPath: String) {
         guard let fileHandle = FileHandle(forReadingAtPath: transcriptPath) else {
             lastFileOffset[sessionId] = 0
@@ -164,5 +200,10 @@ actor ConversationParser {
         let fileSize = (try? fileHandle.seekToEnd()) ?? 0
         lastFileOffset[sessionId] = fileSize
         seenMessageIds[sessionId] = []
+    }
+
+    static func sessionFilePath(sessionId: String, cwd: String) -> String {
+        let projectDir = cwd.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
+        return "\(projectsRootPath)/\(projectDir)/\(sessionId).jsonl"
     }
 }

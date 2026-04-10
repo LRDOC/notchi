@@ -32,17 +32,22 @@ final class NotchiStateMachine {
     func handleEvent(_ event: HookEvent) {
         let session = sessionStore.process(event)
         let isDone = event.status == "waiting_for_input"
+        let transcriptPath = ConversationParser.resolvedTranscriptPath(
+            sessionId: event.sessionId,
+            cwd: event.cwd,
+            transcriptPath: event.transcriptPath
+        )
 
         switch event.event {
         case "UserPromptSubmit":
             pendingPositionMarks[event.sessionId] = Task {
                 await ConversationParser.shared.markCurrentPosition(
                     sessionId: event.sessionId,
-                    transcriptPath: event.transcriptPath
+                    transcriptPath: transcriptPath
                 )
             }
             if session.isInteractive {
-                startFileWatcher(sessionId: event.sessionId, transcriptPath: event.transcriptPath)
+                startFileWatcher(sessionId: event.sessionId, transcriptPath: transcriptPath)
             }
 
             if session.isInteractive, let prompt = event.userPrompt {
@@ -65,7 +70,7 @@ final class NotchiStateMachine {
             SoundService.shared.playNotificationSound(sessionId: event.sessionId, isInteractive: session.isInteractive)
 
         case "PostToolUse":
-            scheduleFileSync(sessionId: event.sessionId, transcriptPath: event.transcriptPath)
+            scheduleFileSync(sessionId: event.sessionId, transcriptPath: transcriptPath)
 
         case "SessionStart":
             handleClaudeUsageResumeTrigger(.sessionStart)
@@ -73,7 +78,7 @@ final class NotchiStateMachine {
         case "Stop":
             SoundService.shared.playNotificationSound(sessionId: event.sessionId, isInteractive: session.isInteractive)
             stopFileWatcher(sessionId: event.sessionId)
-            scheduleFileSync(sessionId: event.sessionId, transcriptPath: event.transcriptPath)
+            scheduleFileSync(sessionId: event.sessionId, transcriptPath: transcriptPath)
 
         case "SessionEnd":
             stopFileWatcher(sessionId: event.sessionId)

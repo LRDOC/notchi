@@ -76,7 +76,9 @@ final class SocketServer {
             return
         }
 
-        chmod(socketPath, 0o777)
+        if chmod(socketPath, 0o600) != 0 {
+            logger.warning("Failed to restrict socket permissions: \(errno)")
+        }
 
         guard listen(serverSocket, 10) == 0 else {
             logger.error("Failed to listen: \(errno)")
