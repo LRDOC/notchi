@@ -138,4 +138,4 @@ If you have any bugs, ideas, or would like to contribute through pull requests, 
 
 ## License
 
-MIT
+GPL-3.0-only. See [LICENSE](LICENSE).

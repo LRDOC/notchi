@@ -1,6 +1,8 @@
 import Foundation
 
 struct AppSettings {
+    static let hideSpriteWhenIdleKey = "hideSpriteWhenIdle"
+
     private static let notificationSoundKey = "notificationSound"
     private static let isMutedKey = "isMuted"
     private static let previousSoundKey = "previousNotificationSound"
@@ -8,6 +10,7 @@ struct AppSettings {
     private static let disabledToolsKey = "disabledTools"
     private static let claudeUsageRecoverySnapshotKey = "claudeUsageRecoverySnapshot"
     private static let codexLastIngestAtKey = "codexLastIngestAt"
+    private static let claudeExtraUsageObservationKey = "claudeExtraUsageObservation"
 
     static func isToolEnabled(_ source: AIToolSource) -> Bool {
         let disabled = UserDefaults.standard.stringArray(forKey: disabledToolsKey) ?? []
@@ -29,6 +32,11 @@ struct AppSettings {
         set { UserDefaults.standard.set(newValue, forKey: isUsageEnabledKey) }
     }
 
+    static var hideSpriteWhenIdle: Bool {
+        get { UserDefaults.standard.bool(forKey: hideSpriteWhenIdleKey) }
+        set { UserDefaults.standard.set(newValue, forKey: hideSpriteWhenIdleKey) }
+    }
+
     static var claudeUsageRecoverySnapshot: ClaudeUsageRecoverySnapshot? {
         get {
             guard let data = UserDefaults.standard.data(forKey: claudeUsageRecoverySnapshotKey) else {
@@ -48,6 +56,22 @@ struct AppSettings {
     static var codexLastIngestAt: Date? {
         get { UserDefaults.standard.object(forKey: codexLastIngestAtKey) as? Date }
         set { UserDefaults.standard.set(newValue, forKey: codexLastIngestAtKey) }
+    }
+
+    static var claudeExtraUsageObservation: ClaudeExtraUsageObservation? {
+        get {
+            guard let data = UserDefaults.standard.data(forKey: claudeExtraUsageObservationKey) else {
+                return nil
+            }
+            return try? JSONDecoder().decode(ClaudeExtraUsageObservation.self, from: data)
+        }
+        set {
+            if let newValue, let data = try? JSONEncoder().encode(newValue) {
+                UserDefaults.standard.set(data, forKey: claudeExtraUsageObservationKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: claudeExtraUsageObservationKey)
+            }
+        }
     }
 
     static var anthropicApiKey: String? {

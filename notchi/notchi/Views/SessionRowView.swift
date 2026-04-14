@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SessionRowView: View {
     let session: SessionData
+    let title: String
     let isSelected: Bool
     let onTap: () -> Void
     let onDelete: () -> Void
@@ -17,7 +18,7 @@ struct SessionRowView: View {
 
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 4) {
-                        Text(session.displayTitle)
+                        Text(title)
                             .font(.system(size: 12, weight: .medium))
                             .foregroundColor(TerminalColors.primaryText)
                             .lineLimit(1)
@@ -50,8 +51,9 @@ struct SessionRowView: View {
                 .buttonStyle(.plain)
                 .onHover { isTrashHovered = $0 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
             .contentShape(Rectangle())
             .background(isSelected || isRowHovered ? TerminalColors.hoverBackground : Color.clear)
             .cornerRadius(6)
@@ -71,11 +73,6 @@ struct SessionRowView: View {
     }
 
     private var stateColor: Color {
-        switch session.task {
-        case .idle, .sleeping, .waiting:
-            return TerminalColors.dimmedText
-        case .working, .compacting:
-            return TerminalColors.amber
-        }
+        session.source.badgeColor
     }
 }

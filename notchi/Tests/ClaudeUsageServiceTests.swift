@@ -82,12 +82,256 @@ private final class RequestRecorder {
     }
 }
 
+private struct ResolverProcessCall: Equatable {
+    let executablePath: String
+    let arguments: [String]
+    let environment: [String: String]?
+}
+
 @MainActor
 final class ClaudeUsageServiceTests: XCTestCase {
     override func tearDown() {
         AppSettings.isUsageEnabled = false
         AppSettings.claudeUsageRecoverySnapshot = nil
+        AppSettings.claudeExtraUsageObservation = nil
+        ClaudeConfigDirectoryResolver.resetTestingHooks()
+        ClaudeCLIResolver.resetTestingHooks()
         super.tearDown()
+    }
+
+    func testClaudeConfigDirectoryResolverUsesProcessEnvironment() {
+        ClaudeConfigDirectoryResolver.testHooks = .init(
+            environment: { ["CLAUDE_CONFIG_DIR": "/tmp/claude-config"] },
+            isExecutableFile: { _ in false },
+            runProcess: { _, _, _ in
+                XCTFail("Shell probing should not run when the environment already provides CLAUDE_CONFIG_DIR")
+                return nil
+            }
+        )
+
+        let resolution = ClaudeConfigDirectoryResolver.resolve()
+
+        XCTAssertEqual(resolution.path, "/tmp/claude-config")
+        XCTAssertEqual(resolution.source, .environment)
+    }
+
+    func testClaudeConfigDirectoryResolverFallsBackToShell() {
+        var processCalls: [[String]] = []
+        ClaudeConfigDirectoryResolver.testHooks = .init(
+            environment: { ["SHELL": "/mock/zsh"] },
+            isExecutableFile: { path in
+                path == "/mock/zsh"
+            },
+            runProcess: { _, arguments, _ in
+                processCalls.append(arguments)
+                if arguments == ["-lc", "printf '%s' \"$CLAUDE_CONFIG_DIR\""] {
+                    return "/tmp/from-shell\n"
+                }
+                return nil
+            }
+        )
+
+        let resolution = ClaudeConfigDirectoryResolver.resolve()
+
+        XCTAssertEqual(resolution.path, "/tmp/from-shell")
+        XCTAssertEqual(resolution.source, .shell)
+        XCTAssertEqual(processCalls, [["-lc", "printf '%s' \"$CLAUDE_CONFIG_DIR\""]])
+    }
+
+    func testClaudeConfigDirectoryResolverExtractsPathFromNoisyShellOutput() {
+        ClaudeConfigDirectoryResolver.testHooks = .init(
+            environment: { ["SHELL": "/mock/zsh"] },
+            isExecutableFile: { path in
+                path == "/mock/zsh"
+            },
+            runProcess: { _, arguments, _ in
+                if arguments == ["-lc", "printf '%s' \"$CLAUDE_CONFIG_DIR\""] {
+                    return "/tmp/plugin-warning-path\n/tmp/from-shell\n"
+                }
+                return nil
+            }
+        )
+
+        let resolution = ClaudeConfigDirectoryResolver.resolve()
+
+        XCTAssertEqual(resolution.path, "/tmp/from-shell")
+        XCTAssertEqual(resolution.source, .shell)
+    }
+
+    func testClaudeConfigDirectoryResolverDoesNotCacheFallbackResults() {
+        var processCallCount = 0
+        ClaudeConfigDirectoryResolver.testHooks = .init(
+            environment: { ["SHELL": "/mock/zsh"] },
+            isExecutableFile: { path in
+                path == "/mock/zsh"
+            },
+            runProcess: { _, arguments, _ in
+                guard arguments == ["-lc", "printf '%s' \"$CLAUDE_CONFIG_DIR\""] ||
+                    arguments == ["-ic", "printf '%s' \"$CLAUDE_CONFIG_DIR\""] else {
+                    return nil
+                }
+
+                processCallCount += 1
+                if processCallCount <= 2 {
+                    return nil
+                }
+
+                if processCallCount == 3 {
+                    return "/tmp/from-shell\n"
+                }
+
+                return nil
+            }
+        )
+
+        let firstResolution = ClaudeConfigDirectoryResolver.resolve()
+        let secondResolution = ClaudeConfigDirectoryResolver.resolve()
+
+        XCTAssertEqual(firstResolution.source, .fallback)
+        XCTAssertEqual(secondResolution.path, "/tmp/from-shell")
+        XCTAssertEqual(secondResolution.source, .shell)
+        XCTAssertEqual(processCallCount, 3)
+    }
+
+    func testClaudeConfigDirectoryResolverDoesNotCacheFallbackWhenInteractiveProbeFailsAfterUnsetLoginProbe() {
+        var processCalls: [[String]] = []
+        ClaudeConfigDirectoryResolver.testHooks = .init(
+            environment: { ["SHELL": "/mock/zsh"] },
+            isExecutableFile: { path in
+                path == "/mock/zsh"
+            },
+            runProcess: { _, arguments, _ in
+                processCalls.append(arguments)
+
+                switch processCalls.count {
+                case 1:
+                    XCTAssertEqual(arguments, ["-lc", "printf '%s' \"$CLAUDE_CONFIG_DIR\""])
+                    return "\n"
+                case 2:
+                    XCTAssertEqual(arguments, ["-ic", "printf '%s' \"$CLAUDE_CONFIG_DIR\""])
+                    return nil
+                case 3:
+                    XCTAssertEqual(arguments, ["-lc", "printf '%s' \"$CLAUDE_CONFIG_DIR\""])
+                    return "\n"
+                case 4:
+                    XCTAssertEqual(arguments, ["-ic", "printf '%s' \"$CLAUDE_CONFIG_DIR\""])
+                    return "/tmp/from-interactive-shell\n"
+                default:
+                    return nil
+                }
+            }
+        )
+
+        let firstResolution = ClaudeConfigDirectoryResolver.resolve()
+        let secondResolution = ClaudeConfigDirectoryResolver.resolve()
+
+        XCTAssertEqual(firstResolution.source, .fallback)
+        XCTAssertEqual(secondResolution.path, "/tmp/from-interactive-shell")
+        XCTAssertEqual(secondResolution.source, .shell)
+        XCTAssertEqual(
+            processCalls,
+            [
+                ["-lc", "printf '%s' \"$CLAUDE_CONFIG_DIR\""],
+                ["-ic", "printf '%s' \"$CLAUDE_CONFIG_DIR\""],
+                ["-lc", "printf '%s' \"$CLAUDE_CONFIG_DIR\""],
+                ["-ic", "printf '%s' \"$CLAUDE_CONFIG_DIR\""],
+            ]
+        )
+    }
+
+    func testClaudeConfigDirectoryResolverCachesVerifiedDefaultFallbackResults() {
+        var processCalls: [[String]] = []
+        ClaudeConfigDirectoryResolver.testHooks = .init(
+            environment: { ["SHELL": "/mock/zsh"] },
+            isExecutableFile: { path in
+                path == "/mock/zsh"
+            },
+            runProcess: { _, arguments, _ in
+                processCalls.append(arguments)
+                return "\n"
+            }
+        )
+
+        let firstResolution = ClaudeConfigDirectoryResolver.resolve()
+        let secondResolution = ClaudeConfigDirectoryResolver.resolve()
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+
+        XCTAssertEqual(firstResolution.path, "\(home)/.claude")
+        XCTAssertEqual(firstResolution.source, .fallback)
+        XCTAssertEqual(secondResolution.path, "\(home)/.claude")
+        XCTAssertEqual(secondResolution.source, .fallback)
+        XCTAssertEqual(processCalls, [["-lc", "printf '%s' \"$CLAUDE_CONFIG_DIR\""], ["-ic", "printf '%s' \"$CLAUDE_CONFIG_DIR\""]])
+    }
+
+    func testClaudeConfigDirectoryResolverFallsBackToInteractiveShell() {
+        var processCalls: [[String]] = []
+        ClaudeConfigDirectoryResolver.testHooks = .init(
+            environment: { ["SHELL": "/mock/zsh"] },
+            isExecutableFile: { path in
+                path == "/mock/zsh"
+            },
+            runProcess: { _, arguments, _ in
+                processCalls.append(arguments)
+                if arguments == ["-ic", "printf '%s' \"$CLAUDE_CONFIG_DIR\""] {
+                    return "~/custom-claude\n"
+                }
+                return nil
+            }
+        )
+
+        let resolution = ClaudeConfigDirectoryResolver.resolve()
+
+        XCTAssertTrue(resolution.path.hasSuffix("/custom-claude"))
+        XCTAssertEqual(resolution.source, .shell)
+        XCTAssertEqual(
+            processCalls,
+            [
+                ["-lc", "printf '%s' \"$CLAUDE_CONFIG_DIR\""],
+                ["-ic", "printf '%s' \"$CLAUDE_CONFIG_DIR\""],
+            ]
+        )
+    }
+
+    func testClaudeConfigDirectoryResolverFallsBackToDefaultDirectory() {
+        ClaudeConfigDirectoryResolver.testHooks = .init(
+            environment: { [:] },
+            isExecutableFile: { _ in false },
+            runProcess: { _, _, _ in nil }
+        )
+
+        let resolution = ClaudeConfigDirectoryResolver.resolve()
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+
+        XCTAssertEqual(resolution.path, "\(home)/.claude")
+        XCTAssertEqual(resolution.source, .fallback)
+    }
+
+    func testResolveUserAgentUsesClaudeBinaryFromResolvedConfigDirectory() {
+        let claudePath = "/tmp/custom-claude/bin/claude"
+        ClaudeConfigDirectoryResolver.testHooks = .init(
+            environment: { ["CLAUDE_CONFIG_DIR": "/tmp/custom-claude"] },
+            isExecutableFile: { _ in false },
+            runProcess: { _, _, _ in nil }
+        )
+
+        var processCalls: [(String, [String])] = []
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { [:] },
+            isExecutableFile: { path in
+                path == claudePath
+            },
+            runProcess: { executablePath, arguments, _ in
+                processCalls.append((executablePath, arguments))
+                return "2.1.92 (Claude Code)\n"
+            }
+        )
+
+        let userAgent = ClaudeCLIResolver.resolveUserAgent()
+
+        XCTAssertEqual(userAgent, "claude-code/2.1.92")
+        XCTAssertEqual(processCalls.count, 1)
+        XCTAssertEqual(processCalls.first?.0, claudePath)
+        XCTAssertEqual(processCalls.first?.1, ["--version"])
     }
 
     func testSuccessfulFetchClearsStaleStateAndSchedulesNormalPolling() async throws {
@@ -213,6 +457,33 @@ final class ClaudeUsageServiceTests: XCTestCase {
         XCTAssertTrue(service.isUsageStale)
         XCTAssertEqual(service.recoveryAction, .retry)
         XCTAssertEqual(scheduler.intervals, [120])
+    }
+
+    func testStoppedPollingDropsAlreadyFiredTimerCallbackBeforeFetchStarts() async throws {
+        let scheduler = PollSchedulerSpy()
+        let recorder = RequestRecorder()
+        let dependencies = makeDependencies(
+            scheduler: scheduler,
+            resolveUserAgent: { "claude-code/2.1.77" },
+            getCachedOAuthToken: { _ in "token" },
+            fetchUsage: { request in
+                recorder.record(request)
+                return (self.makeSuccessPayload(utilization: 42), self.makeResponse(statusCode: 200))
+            }
+        )
+
+        let service = ClaudeUsageService(dependencies: dependencies)
+        service.startPolling()
+        await Task.yield()
+        await Task.yield()
+
+        recorder.reset()
+        scheduler.fireLast()
+        service.stopPolling()
+        await Task.yield()
+        await Task.yield()
+
+        XCTAssertTrue(recorder.paths.isEmpty)
     }
 
     func testExpiredPersistedRecoveryStateIsClearedAndLiveFetchRuns() async throws {
@@ -777,6 +1048,340 @@ final class ClaudeUsageServiceTests: XCTestCase {
         XCTAssertTrue(scheduler.intervals.isEmpty)
     }
 
+    func testShellResolverUsesLoginShellResultWithoutInteractiveFallback() {
+        var processCalls: [[String]] = []
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { [:] },
+            isExecutableFile: { path in
+                path == "/mock/zsh" || path == "/resolved/claude"
+            },
+            runProcess: { executablePath, arguments, _ in
+                XCTAssertEqual(executablePath, "/mock/zsh")
+                processCalls.append(arguments)
+                if arguments == ["-lc", "command -v claude"] {
+                    return "/resolved/claude\n"
+                }
+                return nil
+            }
+        )
+
+        let resolvedPath = ClaudeCLIResolver.resolveCommandPathViaShell(environment: ["SHELL": "/mock/zsh"])
+
+        XCTAssertEqual(resolvedPath, "/resolved/claude")
+        XCTAssertEqual(processCalls, [["-lc", "command -v claude"]])
+    }
+
+    func testShellResolverFallsBackToInteractiveShellWhenLoginShellMisses() {
+        var processCalls: [[String]] = []
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { [:] },
+            isExecutableFile: { path in
+                path == "/mock/zsh" || path == "/resolved/claude"
+            },
+            runProcess: { executablePath, arguments, _ in
+                XCTAssertEqual(executablePath, "/mock/zsh")
+                processCalls.append(arguments)
+                if arguments == ["-ic", "command -v claude"] {
+                    return "/resolved/claude\n"
+                }
+                return nil
+            }
+        )
+
+        let resolvedPath = ClaudeCLIResolver.resolveCommandPathViaShell(environment: ["SHELL": "/mock/zsh"])
+
+        XCTAssertEqual(resolvedPath, "/resolved/claude")
+        XCTAssertEqual(
+            processCalls,
+            [
+                ["-lc", "command -v claude"],
+                ["-ic", "command -v claude"],
+            ]
+        )
+    }
+
+    func testShellResolverIgnoresShellNoiseBeforeExecutablePath() {
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { [:] },
+            isExecutableFile: { path in
+                path == "/mock/zsh" || path == "/resolved/claude"
+            },
+            runProcess: { _, arguments, _ in
+                if arguments == ["-lc", "command -v claude"] {
+                    return "nvm initialized\n /resolved/claude \n"
+                }
+                return nil
+            }
+        )
+
+        let resolvedPath = ClaudeCLIResolver.resolveCommandPathViaShell(environment: ["SHELL": "/mock/zsh"])
+
+        XCTAssertEqual(resolvedPath, "/resolved/claude")
+    }
+
+    func testShellResolverReturnsNilWhenNeitherModeFindsExecutablePath() {
+        var processCalls: [[String]] = []
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { [:] },
+            isExecutableFile: { path in
+                path == "/mock/zsh"
+            },
+            runProcess: { _, arguments, _ in
+                processCalls.append(arguments)
+                return "claude not found\n"
+            }
+        )
+
+        let resolvedPath = ClaudeCLIResolver.resolveCommandPathViaShell(environment: ["SHELL": "/mock/zsh"])
+
+        XCTAssertNil(resolvedPath)
+        XCTAssertEqual(
+            processCalls,
+            [
+                ["-lc", "command -v claude"],
+                ["-ic", "command -v claude"],
+            ]
+        )
+    }
+
+    func testShellResolverFallsBackToDefaultShellsWhenSHELLIsUnset() {
+        var processCalls: [[String]] = []
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { [:] },
+            isExecutableFile: { path in
+                path == "/bin/zsh" || path == "/bin/bash" || path == "/resolved/claude"
+            },
+            runProcess: { executablePath, arguments, _ in
+                processCalls.append([executablePath] + arguments)
+                if executablePath == "/bin/bash", arguments == ["-lc", "command -v claude"] {
+                    return "/resolved/claude\n"
+                }
+                return nil
+            }
+        )
+
+        let resolvedPath = ClaudeCLIResolver.resolveCommandPathViaShell(environment: [:])
+
+        XCTAssertEqual(resolvedPath, "/resolved/claude")
+        XCTAssertEqual(
+            processCalls,
+            [
+                ["/bin/zsh", "-lc", "command -v claude"],
+                ["/bin/zsh", "-ic", "command -v claude"],
+                ["/bin/bash", "-lc", "command -v claude"],
+            ]
+        )
+    }
+
+    func testResolveUserAgentUsesClaudeFromPATHBeforeShellFallback() {
+        var processCalls: [(String, [String])] = []
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { ["PATH": "/mock/bin"] },
+            isExecutableFile: { path in
+                path == "/mock/bin/claude"
+            },
+            runProcess: { executablePath, arguments, _ in
+                processCalls.append((executablePath, arguments))
+                XCTAssertEqual(executablePath, "/mock/bin/claude")
+                XCTAssertEqual(arguments, ["--version"])
+                return "2.1.89 (Claude Code)\n"
+            }
+        )
+
+        let userAgent = ClaudeCLIResolver.resolveUserAgent()
+
+        XCTAssertEqual(userAgent, "claude-code/2.1.89")
+        XCTAssertEqual(processCalls.count, 1)
+    }
+
+    func testResolveVersionInjectsResolvedClaudeDirectoryIntoPATH() {
+        let claudePath = "/mock/nvm/bin/claude"
+        var receivedEnvironment: [String: String]?
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { ["PATH": "/usr/bin:/bin"] },
+            isExecutableFile: { path in
+                path == claudePath
+            },
+            runProcess: { executablePath, arguments, environment in
+                XCTAssertEqual(executablePath, claudePath)
+                XCTAssertEqual(arguments, ["--version"])
+                receivedEnvironment = environment
+                return "2.1.89 (Claude Code)\n"
+            }
+        )
+
+        let version = ClaudeCLIResolver.resolveVersion(at: claudePath)
+
+        XCTAssertEqual(version, "2.1.89")
+        XCTAssertEqual(receivedEnvironment?["PATH"], "/mock/nvm/bin:/usr/bin:/bin")
+    }
+
+    func testResolveVersionWorksForNativeBinaryInstall() {
+        let claudePath = "/opt/homebrew/bin/claude"
+        var processCalls: [ResolverProcessCall] = []
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { ["PATH": "/usr/bin:/bin"] },
+            isExecutableFile: { path in
+                path == claudePath
+            },
+            runProcess: { executablePath, arguments, environment in
+                processCalls.append(
+                    ResolverProcessCall(
+                        executablePath: executablePath,
+                        arguments: arguments,
+                        environment: environment
+                    )
+                )
+                return "2.1.89 (Claude Code)\n"
+            }
+        )
+
+        let version = ClaudeCLIResolver.resolveVersion(at: claudePath)
+
+        XCTAssertEqual(version, "2.1.89")
+        XCTAssertEqual(
+            processCalls,
+            [
+                ResolverProcessCall(
+                    executablePath: claudePath,
+                    arguments: ["--version"],
+                    environment: ["PATH": "/opt/homebrew/bin:/usr/bin:/bin"]
+                ),
+            ]
+        )
+    }
+
+    func testResolveVersionFallsBackToInteractiveShellAfterDirectAndLoginShellMiss() {
+        let claudePath = "/mock/nvm/bin/claude"
+        var processCalls: [ResolverProcessCall] = []
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { ["PATH": "/usr/bin:/bin", "SHELL": "/mock/zsh"] },
+            isExecutableFile: { path in
+                path == claudePath || path == "/mock/zsh"
+            },
+            runProcess: { executablePath, arguments, environment in
+                processCalls.append(
+                    ResolverProcessCall(
+                        executablePath: executablePath,
+                        arguments: arguments,
+                        environment: environment
+                    )
+                )
+                if executablePath == "/mock/zsh", arguments == ["-ic", "\"$1\" --version", "zsh", claudePath] {
+                    return "nvm initialized\n2.1.89 (Claude Code)\n"
+                }
+                return nil
+            }
+        )
+
+        let version = ClaudeCLIResolver.resolveVersion(at: claudePath)
+
+        XCTAssertEqual(version, "2.1.89")
+        XCTAssertEqual(
+            processCalls,
+            [
+                ResolverProcessCall(
+                    executablePath: claudePath,
+                    arguments: ["--version"],
+                    environment: ["PATH": "/mock/nvm/bin:/usr/bin:/bin", "SHELL": "/mock/zsh"]
+                ),
+                ResolverProcessCall(
+                    executablePath: "/mock/zsh",
+                    arguments: ["-lc", "\"$1\" --version", "zsh", claudePath],
+                    environment: ["PATH": "/mock/nvm/bin:/usr/bin:/bin", "SHELL": "/mock/zsh"]
+                ),
+                ResolverProcessCall(
+                    executablePath: "/mock/zsh",
+                    arguments: ["-ic", "\"$1\" --version", "zsh", claudePath],
+                    environment: ["PATH": "/mock/nvm/bin:/usr/bin:/bin", "SHELL": "/mock/zsh"]
+                ),
+            ]
+        )
+    }
+
+    func testResolveVersionShellFallbackPassesResolvedClaudePathAsDollarOne() {
+        let claudePath = "/mock/nvm/bin/claude"
+        var shellArguments: [String]?
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { ["PATH": "/usr/bin:/bin", "SHELL": "/mock/zsh"] },
+            isExecutableFile: { path in
+                path == claudePath || path == "/mock/zsh"
+            },
+            runProcess: { executablePath, arguments, _ in
+                if executablePath == claudePath {
+                    return nil
+                }
+                shellArguments = arguments
+                return "2.1.89 (Claude Code)\n"
+            }
+        )
+
+        let version = ClaudeCLIResolver.resolveVersion(at: claudePath)
+
+        XCTAssertEqual(version, "2.1.89")
+        XCTAssertEqual(shellArguments, ["-lc", "\"$1\" --version", "zsh", claudePath])
+    }
+
+    func testExtractVersionIgnoresShellNoiseAndReturnsFirstVersionLine() {
+        let version = ClaudeCLIResolver.extractVersion(
+            from: """
+            nvm initialized
+            export PATH=/mock/nvm/bin:$PATH
+            2.1.89 (Claude Code)
+            """
+        )
+
+        XCTAssertEqual(version, "2.1.89")
+    }
+
+    func testResolveVersionReturnsNilWhenDirectAndShellProbesDoNotYieldVersion() {
+        let claudePath = "/mock/nvm/bin/claude"
+        var processCalls: [ResolverProcessCall] = []
+        ClaudeCLIResolver.testHooks = .init(
+            environment: { ["PATH": "/usr/bin:/bin", "SHELL": "/mock/zsh"] },
+            isExecutableFile: { path in
+                path == claudePath || path == "/mock/zsh"
+            },
+            runProcess: { executablePath, arguments, environment in
+                processCalls.append(
+                    ResolverProcessCall(
+                        executablePath: executablePath,
+                        arguments: arguments,
+                        environment: environment
+                    )
+                )
+                if executablePath == claudePath {
+                    return "claude version lookup failed\n"
+                }
+                return "nvm initialized\n"
+            }
+        )
+
+        let version = ClaudeCLIResolver.resolveVersion(at: claudePath)
+
+        XCTAssertNil(version)
+        XCTAssertEqual(
+            processCalls,
+            [
+                ResolverProcessCall(
+                    executablePath: claudePath,
+                    arguments: ["--version"],
+                    environment: ["PATH": "/mock/nvm/bin:/usr/bin:/bin", "SHELL": "/mock/zsh"]
+                ),
+                ResolverProcessCall(
+                    executablePath: "/mock/zsh",
+                    arguments: ["-lc", "\"$1\" --version", "zsh", claudePath],
+                    environment: ["PATH": "/mock/nvm/bin:/usr/bin:/bin", "SHELL": "/mock/zsh"]
+                ),
+                ResolverProcessCall(
+                    executablePath: "/mock/zsh",
+                    arguments: ["-ic", "\"$1\" --version", "zsh", claudePath],
+                    environment: ["PATH": "/mock/nvm/bin:/usr/bin:/bin", "SHELL": "/mock/zsh"]
+                ),
+            ]
+        )
+    }
+
     func testConnectAndStartPollingUsesSilentStoredTokenRecovery() async throws {
         let scheduler = PollSchedulerSpy()
         var environmentTokenCalls = 0
@@ -1016,7 +1621,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         await Task.yield()
 
         XCTAssertTrue(AppSettings.isUsageEnabled)
-        XCTAssertEqual(service.error, "Start a Claude Code session to refresh credentials")
+        XCTAssertEqual(service.error, "Start a Claude Code session to track usage")
         XCTAssertEqual(service.recoveryAction, .waitForClaudeCode)
         XCTAssertTrue(scheduler.intervals.isEmpty)
     }
@@ -1153,7 +1758,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         await Task.yield()
 
         XCTAssertNil(service.error)
-        XCTAssertEqual(service.statusMessage, "Start a Claude Code session to refresh credentials")
+        XCTAssertEqual(service.statusMessage, "Start a Claude Code session to track usage")
         XCTAssertTrue(service.isUsageStale)
         XCTAssertEqual(service.recoveryAction, .waitForClaudeCode)
         XCTAssertEqual(service.currentUsage?.usagePercentage, 55)
@@ -1182,7 +1787,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         let service = ClaudeUsageService(dependencies: dependencies)
         AppSettings.isUsageEnabled = true
         service.recoveryAction = .waitForClaudeCode
-        service.error = "Start a Claude Code session to refresh credentials"
+        service.error = "Start a Claude Code session to track usage"
 
         service.handleClaudeResumeTrigger(.sessionStart)
 
@@ -1360,7 +1965,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         let service = ClaudeUsageService(dependencies: dependencies)
         AppSettings.isUsageEnabled = true
         service.recoveryAction = .waitForClaudeCode
-        service.error = "Start a Claude Code session to refresh credentials"
+        service.error = "Start a Claude Code session to track usage"
 
         service.handleClaudeResumeTrigger(.sessionStart)
         XCTAssertEqual(scheduler.intervals, [2])
@@ -1485,7 +2090,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
 
         XCTAssertEqual(clearCachedTokenCalls, 1)
         XCTAssertNil(service.currentUsage)
-        XCTAssertEqual(service.error, "Start a Claude Code session to refresh credentials")
+        XCTAssertEqual(service.error, "Start a Claude Code session to track usage")
         XCTAssertNil(service.statusMessage)
         XCTAssertEqual(service.recoveryAction, .waitForClaudeCode)
         XCTAssertTrue(scheduler.intervals.isEmpty)
@@ -1587,7 +2192,7 @@ final class ClaudeUsageServiceTests: XCTestCase {
         XCTAssertEqual(refreshCalls, 1)
         XCTAssertFalse(fetchCalled)
         XCTAssertNil(service.currentUsage)
-        XCTAssertEqual(service.error, "Start a Claude Code session to refresh credentials")
+        XCTAssertEqual(service.error, "Start a Claude Code session to track usage")
         XCTAssertEqual(service.recoveryAction, .waitForClaudeCode)
         XCTAssertTrue(scheduler.intervals.isEmpty)
     }
@@ -1841,17 +2446,29 @@ final class ClaudeUsageServiceTests: XCTestCase {
         )
     }
 
-    private func makeSuccessPayload(utilization: Double) -> Data {
-        let json = """
-        {
-          "five_hour": {
-            "utilization": \(utilization),
-            "resets_at": "2099-01-01T01:00:00Z"
-          },
-          "seven_day": null
+    private func makeSuccessPayload(
+        utilization: Double,
+        resetAt: String = "2099-01-01T01:00:00Z",
+        extraUsage: ExtraUsage? = nil
+    ) -> Data {
+        var payload: [String: Any] = [
+            "five_hour": [
+                "utilization": utilization,
+                "resets_at": resetAt,
+            ],
+            "seven_day": NSNull(),
+        ]
+
+        if let extraUsage {
+            payload["extra_usage"] = [
+                "is_enabled": extraUsage.isEnabled,
+                "monthly_limit": extraUsage.monthlyLimit.map { $0 as Any } ?? NSNull(),
+                "used_credits": extraUsage.usedCredits.map { $0 as Any } ?? NSNull(),
+                "utilization": extraUsage.utilization.map { $0 as Any } ?? NSNull(),
+            ]
         }
-        """
-        return Data(json.utf8)
+
+        return try! JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
     }
 
     // MARK: - Enterprise Headers Fallback
@@ -2370,6 +2987,189 @@ final class ClaudeUsageServiceTests: XCTestCase {
         XCTAssertEqual(service.currentUsage?.usagePercentage, 75)
     }
 
+    func testOAuthShowsExtraUsageWhenQuotaIsMaxedAndEnabled() async throws {
+        let scheduler = PollSchedulerSpy()
+        let dependencies = makeDependencies(
+            scheduler: scheduler,
+            resolveUserAgent: { "claude-code/2.1.77" },
+            fetchUsage: { _ in
+                (
+                    self.makeSuccessPayload(
+                        utilization: 100,
+                        extraUsage: .init(isEnabled: true, monthlyLimit: 2000, usedCredits: 313, utilization: 15.65)
+                    ),
+                    self.makeResponse(statusCode: 200)
+                )
+            }
+        )
+
+        let service = ClaudeUsageService(dependencies: dependencies)
+        await service.performFetch(with: "token")
+        XCTAssertTrue(service.isUsingExtraUsage)
+        XCTAssertEqual(service.currentExtraUsage?.usedCredits, 313)
+    }
+
+    func testOAuthExtraUsageLatchResetsWhenUsageWindowChanges() async throws {
+        let scheduler = PollSchedulerSpy()
+        var call = 0
+        let dependencies = makeDependencies(
+            scheduler: scheduler,
+            resolveUserAgent: { "claude-code/2.1.77" },
+            fetchUsage: { _ in
+                call += 1
+                let payload: Data
+                switch call {
+                case 1:
+                    payload = self.makeSuccessPayload(
+                        utilization: 100,
+                        resetAt: "2099-01-01T01:00:00Z",
+                        extraUsage: .init(isEnabled: true, monthlyLimit: 2000, usedCredits: 313, utilization: 15.65)
+                    )
+                case 2:
+                    payload = self.makeSuccessPayload(
+                        utilization: 100,
+                        resetAt: "2099-01-01T01:00:00Z",
+                        extraUsage: .init(isEnabled: true, monthlyLimit: 2000, usedCredits: 314, utilization: 15.7)
+                    )
+                default:
+                    payload = self.makeSuccessPayload(
+                        utilization: 12,
+                        resetAt: "2099-01-01T06:00:00Z",
+                        extraUsage: .init(isEnabled: true, monthlyLimit: 2000, usedCredits: 314, utilization: 15.7)
+                    )
+                }
+                return (payload, self.makeResponse(statusCode: 200))
+            }
+        )
+
+        let service = ClaudeUsageService(dependencies: dependencies)
+        await service.performFetch(with: "token")
+        await service.performFetch(with: "token")
+        XCTAssertTrue(service.isUsingExtraUsage)
+
+        await service.performFetch(with: "token")
+        XCTAssertFalse(service.isUsingExtraUsage)
+    }
+
+    func testStartPollingRestoresPersistedExtraUsageObservationForCurrentWindow() async throws {
+        let scheduler = PollSchedulerSpy()
+        let resetAt = "2099-01-01T01:00:00Z"
+        AppSettings.claudeExtraUsageObservation = ClaudeExtraUsageObservation(
+            extraUsage: .init(isEnabled: true, monthlyLimit: 2000, usedCredits: 313, utilization: 15.65),
+            lastObservedExtraUsageCredits: 313,
+            extraUsageResetMarker: resetAt,
+            isUsingExtraUsage: true
+        )
+
+        let dependencies = makeDependencies(
+            scheduler: scheduler,
+            resolveUserAgent: { "claude-code/2.1.77" },
+            getCachedOAuthToken: { _ in "cached-token" },
+            fetchUsage: { request in
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer cached-token")
+                return (
+                    self.makeSuccessPayload(
+                        utilization: 100,
+                        resetAt: resetAt,
+                        extraUsage: .init(isEnabled: true, monthlyLimit: 2000, usedCredits: 313, utilization: 15.65)
+                    ),
+                    self.makeResponse(statusCode: 200)
+                )
+            }
+        )
+
+        let service = ClaudeUsageService(dependencies: dependencies)
+        AppSettings.isUsageEnabled = true
+        service.startPolling()
+        await Task.yield()
+        await Task.yield()
+
+        XCTAssertEqual(service.currentUsage?.usagePercentage, 100)
+        XCTAssertEqual(service.currentExtraUsage?.usedCredits, 313)
+        XCTAssertTrue(service.isUsingExtraUsage)
+    }
+
+    func testHeadersFallbackClearsExtraUsageLatchWhenUsageDropsBelowQuota() async throws {
+        let scheduler = PollSchedulerSpy()
+        var oauthCall = 0
+        let dependencies = makeDependencies(
+            scheduler: scheduler,
+            resolveUserAgent: { "claude-code/2.1.77" },
+            fetchUsage: { request in
+                let path = request.url?.path ?? ""
+                if path == "/api/oauth/usage" {
+                    oauthCall += 1
+                    switch oauthCall {
+                    case 1:
+                        return (
+                            self.makeSuccessPayload(
+                                utilization: 100,
+                                extraUsage: .init(isEnabled: true, monthlyLimit: 2000, usedCredits: 313, utilization: 15.65)
+                            ),
+                            self.makeResponse(statusCode: 200)
+                        )
+                    case 2:
+                        return (
+                            self.makeSuccessPayload(
+                                utilization: 100,
+                                extraUsage: .init(isEnabled: true, monthlyLimit: 2000, usedCredits: 314, utilization: 15.7)
+                            ),
+                            self.makeResponse(statusCode: 200)
+                        )
+                    default:
+                        return (Data(), self.makeResponse(statusCode: 403))
+                    }
+                }
+
+                return (
+                    Data(),
+                    self.makeHeadersResponse(
+                        utilization: "0.60",
+                        reset: "2099-01-01T01:00:00Z"
+                    )
+                )
+            }
+        )
+
+        let service = ClaudeUsageService(dependencies: dependencies)
+        await service.performFetch(with: "token")
+        await service.performFetch(with: "token")
+        XCTAssertTrue(service.isUsingExtraUsage)
+
+        await service.performFetch(with: "token")
+
+        XCTAssertEqual(service.currentUsage?.usagePercentage, 60)
+        XCTAssertFalse(service.isUsingExtraUsage)
+    }
+
+    func testHeadersFallbackShowsExtraUsageWhenQuotaIsMaxed() async throws {
+        let scheduler = PollSchedulerSpy()
+        let dependencies = makeDependencies(
+            scheduler: scheduler,
+            resolveUserAgent: { "claude-code/2.1.77" },
+            fetchUsage: { request in
+                let path = request.url?.path ?? ""
+                if path == "/api/oauth/usage" {
+                    return (Data(), self.makeResponse(statusCode: 429))
+                }
+
+                return (
+                    Data(),
+                    self.makeHeadersResponse(
+                        utilization: "1.0",
+                        reset: "2099-01-01T01:00:00Z"
+                    )
+                )
+            }
+        )
+
+        let service = ClaudeUsageService(dependencies: dependencies)
+        await service.performFetch(with: "token")
+
+        XCTAssertEqual(service.currentUsage?.usagePercentage, 100)
+        XCTAssertTrue(service.isUsingExtraUsage)
+    }
+
     func testOAuth403ThenHeadersNetworkErrorShowsFallbackError() async throws {
         let scheduler = PollSchedulerSpy()
         let dependencies = makeDependencies(
@@ -2472,13 +3272,21 @@ final class ClaudeUsageServiceTests: XCTestCase {
         oauthBackoffUntil: Date? = nil,
         oauthHeadersFallbackProbeUntil: Date? = nil,
         isHeadersFallbackActive: Bool = false,
-        lastGoodUsage: QuotaPeriod? = nil
+        lastGoodUsage: QuotaPeriod? = nil,
+        lastGoodExtraUsage: ExtraUsage? = nil,
+        lastObservedExtraUsageCredits: Double? = nil,
+        extraUsageResetMarker: String? = nil,
+        isUsingExtraUsage: Bool? = nil
     ) -> ClaudeUsageRecoverySnapshot {
         ClaudeUsageRecoverySnapshot(
             oauthBackoffUntil: oauthBackoffUntil,
             oauthHeadersFallbackProbeUntil: oauthHeadersFallbackProbeUntil,
             isHeadersFallbackActive: isHeadersFallbackActive,
-            lastGoodUsage: lastGoodUsage
+            lastGoodUsage: lastGoodUsage,
+            lastGoodExtraUsage: lastGoodExtraUsage,
+            lastObservedExtraUsageCredits: lastObservedExtraUsageCredits,
+            extraUsageResetMarker: extraUsageResetMarker,
+            isUsingExtraUsage: isUsingExtraUsage
         )
     }
 

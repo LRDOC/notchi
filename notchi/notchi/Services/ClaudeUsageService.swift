@@ -20,6 +20,17 @@ struct ClaudeUsageRecoverySnapshot: Codable, Equatable {
     let oauthHeadersFallbackProbeUntil: Date?
     let isHeadersFallbackActive: Bool
     let lastGoodUsage: QuotaPeriod?
+    let lastGoodExtraUsage: ExtraUsage?
+    let lastObservedExtraUsageCredits: Double?
+    let extraUsageResetMarker: String?
+    let isUsingExtraUsage: Bool?
+}
+
+struct ClaudeExtraUsageObservation: Codable, Equatable {
+    let extraUsage: ExtraUsage?
+    let lastObservedExtraUsageCredits: Double?
+    let extraUsageResetMarker: String?
+    let isUsingExtraUsage: Bool
 }
 
 protocol ClaudeUsagePollTimer {
@@ -66,17 +77,256 @@ private struct AnthropicErrorDetail: Decodable {
     let message: String?
 }
 
-private enum ClaudeCLIResolver {
-    static func resolveUserAgent() -> String? {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let knownPaths = [
-            "\(home)/.local/bin/claude",
-            "\(home)/.claude/bin/claude",
-            "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude",
-        ]
+private func runProcessWithTimeout(
+    executablePath: String,
+    arguments: [String],
+    environment: [String: String]? = nil,
+    commandTimeout: TimeInterval
+) -> String? {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executablePath)
+    process.arguments = arguments
+    process.environment = environment
 
-        for claudePath in knownPaths where FileManager.default.isExecutableFile(atPath: claudePath) {
+    let stdoutPipe = Pipe()
+    process.standardOutput = stdoutPipe
+    process.standardError = Pipe()
+
+    let completion = DispatchSemaphore(value: 0)
+    process.terminationHandler = { _ in
+        completion.signal()
+    }
+
+    do {
+        try process.run()
+    } catch {
+        return nil
+    }
+
+    if completion.wait(timeout: .now() + commandTimeout) == .timedOut {
+        process.terminate()
+        return nil
+    }
+
+    let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+    guard let output = String(data: data, encoding: .utf8) else { return nil }
+    return output
+}
+
+private func extractAbsolutePath(from output: String) -> String? {
+    output
+        .split(separator: "\n")
+        .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        .last { $0.hasPrefix("/") || $0.hasPrefix("~") }
+}
+
+enum ClaudeConfigDirectorySource: String {
+    case environment = "env"
+    case shell = "shell"
+    case fallback = "default"
+}
+
+struct ClaudeConfigDirectoryResolution {
+    let path: String
+    let source: ClaudeConfigDirectorySource
+    let shouldCache: Bool
+
+    var directoryURL: URL {
+        URL(fileURLWithPath: path, isDirectory: true)
+    }
+
+    var settingsURL: URL {
+        directoryURL.appendingPathComponent("settings.json")
+    }
+
+    var hooksDirectoryURL: URL {
+        directoryURL.appendingPathComponent("hooks", isDirectory: true)
+    }
+
+    var hookScriptURL: URL {
+        hooksDirectoryURL.appendingPathComponent("notchi-hook.sh")
+    }
+
+    var projectsDirectoryURL: URL {
+        directoryURL.appendingPathComponent("projects", isDirectory: true)
+    }
+
+    var claudeBinaryPath: String {
+        directoryURL.appendingPathComponent("bin/claude").path
+    }
+
+    var displayPath: String {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        guard path.hasPrefix(home) else { return path }
+        return "~" + String(path.dropFirst(home.count))
+    }
+}
+
+enum ClaudeConfigDirectoryResolver {
+    struct TestHooks {
+        var environment: () -> [String: String]
+        var isExecutableFile: (String) -> Bool
+        var runProcess: (
+            _ executablePath: String,
+            _ arguments: [String],
+            _ environment: [String: String]?
+        ) -> String?
+    }
+
+    private static let commandTimeout: TimeInterval = 2
+    private static var cachedResolution: ClaudeConfigDirectoryResolution?
+    static var testHooks = makeDefaultTestHooks()
+
+    static func resolve() -> ClaudeConfigDirectoryResolution {
+        if let cachedResolution {
+            return cachedResolution
+        }
+
+        let environment = testHooks.environment()
+        let resolved: ClaudeConfigDirectoryResolution
+
+        if let path = normalize(path: environment["CLAUDE_CONFIG_DIR"]) {
+            resolved = ClaudeConfigDirectoryResolution(path: path, source: .environment, shouldCache: true)
+        } else {
+            switch resolveViaShell(environment: environment) {
+            case .resolved(let path):
+                resolved = ClaudeConfigDirectoryResolution(path: path, source: .shell, shouldCache: true)
+            case .unset:
+                let fallback = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".claude", isDirectory: true)
+                    .path
+                resolved = ClaudeConfigDirectoryResolution(path: fallback, source: .fallback, shouldCache: true)
+            case .probeFailed:
+                let fallback = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".claude", isDirectory: true)
+                    .path
+                resolved = ClaudeConfigDirectoryResolution(path: fallback, source: .fallback, shouldCache: false)
+            }
+        }
+
+        if resolved.shouldCache {
+            cachedResolution = resolved
+        }
+        return resolved
+    }
+
+    static func resetTestingHooks() {
+        testHooks = makeDefaultTestHooks()
+        cachedResolution = nil
+    }
+
+    private static func makeDefaultTestHooks() -> TestHooks {
+        TestHooks(
+            environment: { ProcessInfo.processInfo.environment },
+            isExecutableFile: { path in
+                FileManager.default.isExecutableFile(atPath: path)
+            },
+            runProcess: { executablePath, arguments, environment in
+                runProcessWithTimeout(
+                    executablePath: executablePath,
+                    arguments: arguments,
+                    environment: environment,
+                    commandTimeout: commandTimeout
+                )
+            }
+        )
+    }
+
+    private enum ShellResolution {
+        case resolved(String)
+        case unset
+        case probeFailed
+    }
+
+    private enum ShellProbeResult {
+        case resolved(String)
+        case unset
+        case failed
+    }
+
+    private static func resolveViaShell(environment: [String: String]) -> ShellResolution {
+        let probeCommand = "printf '%s' \"$CLAUDE_CONFIG_DIR\""
+        var sawSuccessfulProbe = false
+        var sawFailedProbe = false
+
+        for shellPath in shellCandidates(from: environment) {
+            guard testHooks.isExecutableFile(shellPath) else { continue }
+
+            switch runShellProbe(executablePath: shellPath, arguments: ["-lc", probeCommand]) {
+            case .resolved(let path):
+                return .resolved(path)
+            case .unset:
+                sawSuccessfulProbe = true
+            case .failed:
+                sawFailedProbe = true
+            }
+
+            switch runShellProbe(executablePath: shellPath, arguments: ["-ic", probeCommand]) {
+            case .resolved(let path):
+                return .resolved(path)
+            case .unset:
+                sawSuccessfulProbe = true
+            case .failed:
+                sawFailedProbe = true
+            }
+        }
+
+        if sawFailedProbe {
+            return .probeFailed
+        }
+
+        return sawSuccessfulProbe ? .unset : .probeFailed
+    }
+
+    private static func runShellProbe(executablePath: String, arguments: [String]) -> ShellProbeResult {
+        guard let output = testHooks.runProcess(executablePath, arguments, nil) else {
+            return .failed
+        }
+
+        guard let path = normalize(path: extractAbsolutePath(from: output)) else {
+            return .unset
+        }
+
+        return .resolved(path)
+    }
+
+    private static func normalize(path rawPath: String?) -> String? {
+        guard let rawPath else { return nil }
+        let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let expanded = (trimmed as NSString).expandingTildeInPath
+        guard expanded.hasPrefix("/") else { return nil }
+
+        return URL(fileURLWithPath: expanded, isDirectory: true)
+            .standardizedFileURL
+            .path
+    }
+
+    private static func shellCandidates(from environment: [String: String]) -> [String] {
+        var seenShells: Set<String> = []
+        return [environment["SHELL"], "/bin/zsh", "/bin/bash"]
+            .compactMap { $0 }
+            .filter { seenShells.insert($0).inserted }
+    }
+}
+
+enum ClaudeCLIResolver {
+    struct TestHooks {
+        var environment: () -> [String: String]
+        var isExecutableFile: (String) -> Bool
+        var runProcess: (
+            _ executablePath: String,
+            _ arguments: [String],
+            _ environment: [String: String]?
+        ) -> String?
+    }
+
+    private static let commandTimeout: TimeInterval = 2
+    static var testHooks = makeDefaultTestHooks()
+
+    static func resolveUserAgent() -> String? {
+        for claudePath in knownExecutablePaths() {
             guard let version = resolveVersion(at: claudePath) else { continue }
             return "claude-code/\(version)"
         }
@@ -84,34 +334,185 @@ private enum ClaudeCLIResolver {
         return nil
     }
 
-    private static func resolveVersion(at path: String) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = ["--version"]
+    static func resetTestingHooks() {
+        testHooks = makeDefaultTestHooks()
+    }
 
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
+    private static func makeDefaultTestHooks() -> TestHooks {
+        TestHooks(
+            environment: { ProcessInfo.processInfo.environment },
+            isExecutableFile: { path in
+                FileManager.default.isExecutableFile(atPath: path)
+            },
+            runProcess: { executablePath, arguments, environment in
+                runProcessWithTimeout(
+                    executablePath: executablePath,
+                    arguments: arguments,
+                    environment: environment,
+                    commandTimeout: commandTimeout
+                )
+            }
+        )
+    }
 
-        do {
-            try process.run()
-            let done = DispatchSemaphore(value: 0)
-            process.terminationHandler = { _ in done.signal() }
-            if done.wait(timeout: .now() + .seconds(2)) == .timedOut {
-                process.terminate()
-                return nil
+    private static func knownExecutablePaths() -> [String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let environment = testHooks.environment()
+        let explicitPaths = [
+            "\(home)/.local/bin/claude",
+            ClaudeConfigDirectoryResolver.resolve().claudeBinaryPath,
+            "/opt/homebrew/bin/claude",
+            "/usr/local/bin/claude",
+        ]
+        let pathDerivedCandidates = (environment["PATH"] ?? "")
+            .split(separator: ":")
+            .map { "\($0)/claude" }
+        let shellResolvedPath = resolveCommandPathViaShell(environment: environment).map { [$0] } ?? []
+
+        var resolvedPaths: [String] = []
+        var seenPaths: Set<String> = []
+
+        for path in explicitPaths + pathDerivedCandidates + shellResolvedPath {
+            guard path.hasPrefix("/") else { continue }
+            guard !seenPaths.contains(path) else { continue }
+            guard testHooks.isExecutableFile(path) else { continue }
+            seenPaths.insert(path)
+            resolvedPaths.append(path)
+        }
+
+        return resolvedPaths
+    }
+
+    static func resolveCommandPathViaShell(environment: [String: String]) -> String? {
+        for shellPath in shellCandidates(from: environment) {
+            guard testHooks.isExecutableFile(shellPath) else { continue }
+            if let resolvedPath = resolveCommandPathViaShell(
+                executablePath: shellPath,
+                arguments: ["-lc", "command -v claude"]
+            ) {
+                return resolvedPath
             }
 
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            guard let output = String(data: data, encoding: .utf8) else { return nil }
-            let components = output.trimmingCharacters(in: .whitespacesAndNewlines)
-                .components(separatedBy: " ")
-            guard let version = components.first, !version.isEmpty else { return nil }
-            return version
-        } catch {
+            // nvm commonly exposes claude from interactive rc files like .zshrc, not login-only startup files.
+            if let resolvedPath = resolveCommandPathViaShell(
+                executablePath: shellPath,
+                arguments: ["-ic", "command -v claude"]
+            ) {
+                return resolvedPath
+            }
+        }
+
+        return nil
+    }
+
+    private static func resolveCommandPathViaShell(
+        executablePath: String,
+        arguments: [String]
+    ) -> String? {
+        guard let output = testHooks.runProcess(executablePath, arguments, nil) else {
             return nil
         }
+
+        guard let resolvedPath = extractExecutablePath(from: output) else {
+            return nil
+        }
+
+        guard testHooks.isExecutableFile(resolvedPath) else {
+            return nil
+        }
+
+        return resolvedPath
     }
+
+    static func extractExecutablePath(from output: String) -> String? {
+        extractAbsolutePath(from: output)
+    }
+
+    static func resolveVersion(at path: String) -> String? {
+        let environment = versionProbeEnvironment(for: path)
+        if let version = resolveVersion(
+            executablePath: path,
+            arguments: ["--version"],
+            environment: environment
+        ) {
+            return version
+        }
+
+        return resolveVersionViaShell(at: path, environment: environment)
+    }
+
+    static func extractVersion(from output: String) -> String? {
+        let versionLine = output
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { $0.first?.isNumber == true }
+
+        guard let versionLine else { return nil }
+        guard let version = versionLine.split(whereSeparator: \.isWhitespace).first else { return nil }
+        return String(version)
+    }
+
+    private static func shellCandidates(from environment: [String: String]) -> [String] {
+        var seenShells: Set<String> = []
+        return [environment["SHELL"], "/bin/zsh", "/bin/bash"]
+            .compactMap { $0 }
+            .filter { seenShells.insert($0).inserted }
+    }
+
+    private static func versionProbeEnvironment(for path: String) -> [String: String] {
+        var environment = testHooks.environment()
+        let executableDirectory = URL(fileURLWithPath: path).deletingLastPathComponent().path
+        let existingPath = environment["PATH"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let basePath: String
+        if let existingPath, !existingPath.isEmpty {
+            basePath = existingPath
+        } else {
+            basePath = "/usr/bin:/bin:/usr/sbin:/sbin"
+        }
+        environment["PATH"] = "\(executableDirectory):\(basePath)"
+        return environment
+    }
+
+    private static func resolveVersionViaShell(
+        at path: String,
+        environment: [String: String]
+    ) -> String? {
+        for shellPath in shellCandidates(from: environment) {
+            guard testHooks.isExecutableFile(shellPath) else { continue }
+
+            let shellArg0 = URL(fileURLWithPath: shellPath).lastPathComponent
+            if let version = resolveVersion(
+                executablePath: shellPath,
+                arguments: ["-lc", "\"$1\" --version", shellArg0, path],
+                environment: environment
+            ) {
+                return version
+            }
+
+            if let version = resolveVersion(
+                executablePath: shellPath,
+                arguments: ["-ic", "\"$1\" --version", shellArg0, path],
+                environment: environment
+            ) {
+                return version
+            }
+        }
+
+        return nil
+    }
+
+    private static func resolveVersion(
+        executablePath: String,
+        arguments: [String],
+        environment: [String: String]
+    ) -> String? {
+        guard let output = testHooks.runProcess(executablePath, arguments, environment) else {
+            return nil
+        }
+
+        return extractVersion(from: output)
+    }
+
 }
 
 private enum ClaudeUsageAccessTokenSource {
@@ -192,6 +593,8 @@ final class ClaudeUsageService {
     static let shared = ClaudeUsageService()
 
     var currentUsage: QuotaPeriod?
+    var currentExtraUsage: ExtraUsage?
+    var isUsingExtraUsage = false
     var isLoading = false
     var error: String?
     var statusMessage: String?
@@ -212,6 +615,7 @@ final class ClaudeUsageService {
     private var pollTimer: (any ClaudeUsagePollTimer)?
     private var pendingResumeReconnectTimer: (any ClaudeUsagePollTimer)?
     private let pollInterval: TimeInterval = 60
+    private var pollScheduleGeneration: UInt64 = 0
     private var consecutiveRateLimits = 0
     private var cachedToken: String?
     private var preferHeadersFallback = false
@@ -220,6 +624,8 @@ final class ClaudeUsageService {
     private var oauthHeadersFallbackProbeUntil: Date?
     private var isHeadersFallbackActive = false
     private var didAttemptHeadersFallbackInOAuthBackoff = false
+    private var lastObservedExtraUsageCredits: Double?
+    private var extraUsageResetMarker: String?
 
     init() {
         self.dependencies = .live
@@ -233,6 +639,7 @@ final class ClaudeUsageService {
         AppSettings.isUsageEnabled = true
         clearTransientState()
         clearOAuthBackoffState()
+        restorePersistedExtraUsageObservationIfNeeded()
         preferHeadersFallback = false
         oauthRecheckCounter = 0
         stopPolling()
@@ -312,6 +719,7 @@ final class ClaudeUsageService {
             AppSettings.isUsageEnabled = true
             cachedToken = resolution.token
 
+            restorePersistedExtraUsageObservationIfNeeded()
             restoreRecoverySnapshotIfNeeded()
 
             if isHeadersFallbackActive {
@@ -443,6 +851,7 @@ final class ClaudeUsageService {
     func stopPolling() {
         pollTimer?.invalidate()
         pollTimer = nil
+        pollScheduleGeneration &+= 1
         clearPendingResumeReconnect()
     }
 
@@ -451,9 +860,12 @@ final class ClaudeUsageService {
         let baseInterval = interval ?? pollInterval
         let jitter = dependencies.pollJitter()
         let effectiveInterval = max(10, baseInterval + jitter, minimumInterval ?? 0)
+        pollScheduleGeneration &+= 1
+        let generation = pollScheduleGeneration
         pollTimer = dependencies.schedulePoll(effectiveInterval) { [weak self] in
             Task { @MainActor [weak self] in
-                await self?.fetchUsage()
+                guard let self, self.pollScheduleGeneration == generation else { return }
+                await self.fetchUsage()
             }
         }
         logger.info("Next usage poll in \(Int(effectiveInterval))s")
@@ -745,6 +1157,10 @@ final class ClaudeUsageService {
             preferHeadersFallback = false
             clearTransientState()
             currentUsage = usageResponse.fiveHour
+            reconcileExtraUsageState(
+                with: usageResponse.extraUsage,
+                usage: usageResponse.fiveHour
+            )
             logger.info("Usage fetched via OAuth: \(self.currentUsage?.usagePercentage ?? 0)%")
             schedulePollTimer()
             return .success
@@ -835,6 +1251,7 @@ final class ClaudeUsageService {
             let usage = QuotaPeriod(utilization: (utilization * 100).rounded(), resetDate: resetDate)
             isConnected = true
             currentUsage = usage
+            reconcileExtraUsageStateForHeaders(using: usage)
 
             switch context {
             case .activeFallbackRefresh:
@@ -983,7 +1400,7 @@ final class ClaudeUsageService {
                 return .handled
             }
 
-            presentWaitForClaudeCode(message: "Start a Claude Code session to refresh credentials")
+            presentWaitForClaudeCode(message: "Start a Claude Code session to track usage")
             stopPolling()
             return .handled
         }
@@ -1012,7 +1429,7 @@ final class ClaudeUsageService {
             logger.info("Claude Code credential metadata is still expired after OAuth 401")
         }
 
-        return .waitForClaudeCode("Start a Claude Code session to refresh credentials")
+        return .waitForClaudeCode("Start a Claude Code session to track usage")
     }
 
     private func recoverFromEmptyHeadersFallback(afterOAuth403With currentToken: String, userInitiated: Bool) async {
@@ -1145,6 +1562,66 @@ final class ClaudeUsageService {
         statusMessage = nil
         isUsageStale = false
         recoveryAction = .none
+    }
+
+    private func reconcileExtraUsageState(
+        with extraUsage: ExtraUsage?,
+        usage: QuotaPeriod?
+    ) {
+        synchronizeExtraUsageWindow(with: usage)
+        currentExtraUsage = extraUsage
+        let isAtQuota = (usage?.usagePercentage ?? 0) >= 100
+
+        guard let extraUsage else {
+            if !isAtQuota {
+                isUsingExtraUsage = false
+            }
+            lastObservedExtraUsageCredits = nil
+            persistExtraUsageObservationIfNeeded()
+            return
+        }
+
+        guard extraUsage.isEnabled else {
+            isUsingExtraUsage = false
+            lastObservedExtraUsageCredits = extraUsage.usedCredits
+            persistExtraUsageObservationIfNeeded()
+            return
+        }
+
+        if !isAtQuota {
+            isUsingExtraUsage = false
+        } else {
+            // OAuth responses expose extra_usage directly, so a 100% window
+            // with extra usage enabled should present the same state as the
+            // headers fallback path.
+            isUsingExtraUsage = true
+        }
+
+        lastObservedExtraUsageCredits = extraUsage.usedCredits
+
+        persistExtraUsageObservationIfNeeded()
+    }
+
+    private func reconcileExtraUsageStateForHeaders(using usage: QuotaPeriod?) {
+        synchronizeExtraUsageWindow(with: usage)
+        let isAtQuota = (usage?.usagePercentage ?? 0) >= 100
+
+        // Headers fallback does not expose the extra_usage object, so once
+        // we're limited to unified rate-limit headers we treat 100% usage as
+        // extra usage to match Claude Code's visible state more closely.
+        isUsingExtraUsage = isAtQuota
+
+        persistExtraUsageObservationIfNeeded()
+    }
+
+    private func synchronizeExtraUsageWindow(with usage: QuotaPeriod?) {
+        let nextResetMarker = usage?.resetsAt
+        if let previousResetMarker = extraUsageResetMarker,
+           let nextResetMarker,
+           previousResetMarker != nextResetMarker {
+            isUsingExtraUsage = false
+        }
+        extraUsageResetMarker = nextResetMarker
     }
 
     private func clearPendingResumeReconnect() {
@@ -1334,6 +1811,10 @@ final class ClaudeUsageService {
         }
 
         currentUsage = isUsageStillValid(snapshot.lastGoodUsage, now: now) ? snapshot.lastGoodUsage : nil
+        currentExtraUsage = snapshot.lastGoodExtraUsage
+        lastObservedExtraUsageCredits = snapshot.lastObservedExtraUsageCredits
+        extraUsageResetMarker = snapshot.extraUsageResetMarker
+        isUsingExtraUsage = snapshot.isUsingExtraUsage ?? false
         oauthBackoffUntil = hasActiveOAuthBackoff ? snapshot.oauthBackoffUntil : nil
         oauthHeadersFallbackProbeUntil = hasActiveHeadersFallback ? snapshot.oauthHeadersFallbackProbeUntil : nil
         isHeadersFallbackActive = hasActiveHeadersFallback
@@ -1346,6 +1827,22 @@ final class ClaudeUsageService {
         } else if hasActiveOAuthBackoff {
             logger.info("Restored OAuth recovery window from persistence")
         }
+    }
+
+    private func restorePersistedExtraUsageObservationIfNeeded() {
+        guard let observation = AppSettings.claudeExtraUsageObservation else {
+            return
+        }
+
+        guard isExtraUsageWindowStillValid(resetMarker: observation.extraUsageResetMarker, now: dependencies.now()) else {
+            AppSettings.claudeExtraUsageObservation = nil
+            return
+        }
+
+        currentExtraUsage = observation.extraUsage
+        lastObservedExtraUsageCredits = observation.lastObservedExtraUsageCredits
+        extraUsageResetMarker = observation.extraUsageResetMarker
+        isUsingExtraUsage = observation.isUsingExtraUsage
     }
 
     private func persistRecoverySnapshotIfNeeded() {
@@ -1367,8 +1864,44 @@ final class ClaudeUsageService {
             oauthBackoffUntil: oauthBackoffUntil,
             oauthHeadersFallbackProbeUntil: oauthHeadersFallbackProbeUntil,
             isHeadersFallbackActive: isHeadersFallbackActive,
-            lastGoodUsage: usageToPersist
+            lastGoodUsage: usageToPersist,
+            lastGoodExtraUsage: currentExtraUsage,
+            lastObservedExtraUsageCredits: lastObservedExtraUsageCredits,
+            extraUsageResetMarker: extraUsageResetMarker,
+            isUsingExtraUsage: isUsingExtraUsage
         )
+    }
+
+    private func persistExtraUsageObservationIfNeeded() {
+        guard let observation = makeExtraUsageObservation() else {
+            AppSettings.claudeExtraUsageObservation = nil
+            return
+        }
+
+        AppSettings.claudeExtraUsageObservation = observation
+    }
+
+    private func makeExtraUsageObservation() -> ClaudeExtraUsageObservation? {
+        guard isExtraUsageWindowStillValid(resetMarker: extraUsageResetMarker, now: dependencies.now()),
+              currentExtraUsage != nil || lastObservedExtraUsageCredits != nil || isUsingExtraUsage else {
+            return nil
+        }
+
+        return ClaudeExtraUsageObservation(
+            extraUsage: currentExtraUsage,
+            lastObservedExtraUsageCredits: lastObservedExtraUsageCredits,
+            extraUsageResetMarker: extraUsageResetMarker,
+            isUsingExtraUsage: isUsingExtraUsage
+        )
+    }
+
+    private func isExtraUsageWindowStillValid(resetMarker: String?, now: Date) -> Bool {
+        guard let resetMarker else {
+            return false
+        }
+
+        let resetDate = Self.isoFractional.date(from: resetMarker) ?? Self.isoBasic.date(from: resetMarker)
+        return resetDate.map { $0 > now } ?? false
     }
 
     private func isUsageStillValid(_ usage: QuotaPeriod?, now: Date) -> Bool {

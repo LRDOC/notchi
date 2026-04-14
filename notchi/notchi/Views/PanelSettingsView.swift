@@ -2,6 +2,7 @@ import ServiceManagement
 import SwiftUI
 
 struct PanelSettingsView: View {
+    @AppStorage(AppSettings.hideSpriteWhenIdleKey) private var hideSpriteWhenIdle = false
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     @State private var installedTools: [AIToolSource] = []
     @State private var installErrors: [AIToolSource: String] = [:]
@@ -61,6 +62,13 @@ struct PanelSettingsView: View {
             Button(action: installAllHooks) {
                 SettingsRowView(icon: "terminal", title: "Hooks") {
                     hooksStatusBadge
+                }
+            }
+            .buttonStyle(.plain)
+
+            Button(action: toggleHideSpriteWhenIdle) {
+                SettingsRowView(icon: "eye.slash", title: "Hide Sprite When Idle") {
+                    ToggleSwitch(isOn: hideSpriteWhenIdle)
                 }
             }
             .buttonStyle(.plain)
@@ -216,11 +224,11 @@ struct PanelSettingsView: View {
     }
 
     private func openGitHubRepo() {
-        NSWorkspace.shared.open(URL(string: "https://github.com/LRDOC/notchi")!)
+        NSWorkspace.shared.open(URL(string: "https://github.com/sk-ruban/notchi")!)
     }
 
     private func openLatestReleasePage() {
-        NSWorkspace.shared.open(URL(string: "https://github.com/LRDOC/notchi/releases/latest")!)
+        NSWorkspace.shared.open(URL(string: "https://github.com/sk-ruban/notchi/releases/latest")!)
     }
 
     private var quitSection: some View {
@@ -260,6 +268,10 @@ struct PanelSettingsView: View {
 
     private func connectUsage() {
         ClaudeUsageService.shared.connectAndStartPolling()
+    }
+
+    private func toggleHideSpriteWhenIdle() {
+        hideSpriteWhenIdle.toggle()
     }
 
     private func handleUpdatesAction() {
@@ -334,7 +346,7 @@ struct PanelSettingsView: View {
     }
 
     private func installAllHooks() {
-        Task.detached(priority: .userInitiated) {
+        Task(priority: .userInitiated) {
             var issues = HookInstallerCoordinator.compatibilityIssues()
             for source in AIToolSource.allCases {
                 guard let installer = HookInstallerCoordinator.installer(for: source) else { continue }
@@ -343,39 +355,35 @@ struct PanelSettingsView: View {
                     issues[source] = error.localizedDescription
                 }
             }
-            await MainActor.run { installErrors = issues }
-            await MainActor.run { refreshHookStatus() }
+            installErrors = issues
+            refreshHookStatus()
         }
     }
 
     private func installTool(_ source: AIToolSource) {
-        Task.detached(priority: .userInitiated) {
+        Task(priority: .userInitiated) {
             guard let installer = HookInstallerCoordinator.installer(for: source) else { return }
             let result = installer.installIfNeeded()
-            await MainActor.run {
-                if case .failed(let error) = result {
-                    installErrors[source] = error.localizedDescription
-                } else {
-                    installErrors.removeValue(forKey: source)
-                }
+            if case .failed(let error) = result {
+                installErrors[source] = error.localizedDescription
+            } else {
+                installErrors.removeValue(forKey: source)
             }
-            await MainActor.run { refreshHookStatus() }
+            refreshHookStatus()
         }
     }
 
     private func refreshHookStatus() {
-        Task.detached(priority: .userInitiated) {
+        Task(priority: .userInitiated) {
             let tools = HookInstallerCoordinator.installedTools()
             let issues = HookInstallerCoordinator.compatibilityIssues()
-            await MainActor.run {
-                installedTools = tools
-                for (source, message) in issues {
-                    installErrors[source] = message
-                }
-                let installed = Set(tools)
-                for source in AIToolSource.allCases where installed.contains(source) {
-                    installErrors.removeValue(forKey: source)
-                }
+            installedTools = tools
+            for (source, message) in issues {
+                installErrors[source] = message
+            }
+            let installed = Set(tools)
+            for source in AIToolSource.allCases where installed.contains(source) {
+                installErrors.removeValue(forKey: source)
             }
         }
     }

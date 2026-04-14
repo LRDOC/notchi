@@ -34,8 +34,20 @@ struct NotchContentView: View {
         stateMachine.sessionStore
     }
 
+    private var activeSession: SessionData? {
+        sessionStore.effectiveSession
+    }
+
     private var notchSize: CGSize { panelManager.notchSize }
     private var isExpanded: Bool { panelManager.isExpanded }
+    private var collapsedMode: NotchPanelManager.CollapsedMode { panelManager.collapsedMode }
+    private var isCompactIdle: Bool { !isExpanded && collapsedMode == .compactIdle }
+    private var collapsedHeaderState: NotchiState? {
+        Self.collapsedHeaderState(
+            activeSessionState: activeSession?.state,
+            isCompactIdle: isCompactIdle
+        )
+    }
 
     private var panelAnimation: Animation {
         isExpanded
@@ -259,16 +271,24 @@ struct NotchContentView: View {
 
     @ViewBuilder
     private var headerSprites: some View {
-        let topSession = sessionStore.effectiveSession
-        SessionSpriteView(
-            state: topSession?.state ?? .idle,
-            isSelected: true
-        )
+        if let collapsedHeaderState {
+            SessionSpriteView(
+                state: collapsedHeaderState,
+                isSelected: true
+            )
+        }
     }
 
     private func toggleMute() {
         AppSettings.toggleMute()
         isMuted = AppSettings.isMuted
+    }
+
+    static func collapsedHeaderState(activeSessionState: NotchiState?, isCompactIdle: Bool) -> NotchiState? {
+        if let activeSessionState {
+            return activeSessionState
+        }
+        return isCompactIdle ? nil : .idle
     }
 }
 

@@ -48,6 +48,40 @@ struct HookEvent: Decodable, Sendable {
         self.interactive = interactive
     }
 
+    init(
+        sessionId: String,
+        transcriptPath: String?,
+        cwd: String,
+        event: String,
+        status: String,
+        pid: Int? = nil,
+        tty: String? = nil,
+        tool: String? = nil,
+        toolInput: [String: AnyCodable]? = nil,
+        toolUseId: String? = nil,
+        userPrompt: String? = nil,
+        permissionMode: String? = nil,
+        source: String? = nil,
+        interactive: Bool? = nil
+    ) {
+        self.init(
+            sessionId: sessionId,
+            cwd: cwd,
+            event: event,
+            status: status,
+            pid: pid,
+            tty: tty,
+            tool: tool,
+            toolInput: toolInput,
+            toolUseId: toolUseId,
+            userPrompt: userPrompt,
+            transcriptPath: transcriptPath,
+            permissionMode: permissionMode,
+            source: source,
+            interactive: interactive
+        )
+    }
+
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
         case sessionIdCamel = "sessionId"

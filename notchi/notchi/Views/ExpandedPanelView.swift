@@ -40,6 +40,10 @@ struct ExpandedPanelView: View {
         state.task == .working || state.task == .compacting || state.task == .waiting
     }
 
+    private var currentSpinnerVerb: String {
+        effectiveSession?.currentSpinnerVerb ?? SpinnerVerbs.defaultVerb
+    }
+
     private var hasActivity: Bool {
         guard let session = effectiveSession else { return false }
         return !unifiedActivityItems.isEmpty ||
@@ -128,6 +132,9 @@ struct ExpandedPanelView: View {
 
                     SessionListView(
                         sessions: sessionStore.sortedSessions,
+                        titleForSession: { session in
+                            sessionStore.displayTitle(for: session)
+                        },
                         selectedSessionId: sessionStore.selectedSessionId,
                         onSelectSession: { sessionId in
                             sessionStore.selectSession(sessionId)
@@ -177,7 +184,7 @@ struct ExpandedPanelView: View {
                 if showIndicator && !isActivityCollapsed {
                     WorkingIndicatorView(
                         state: state,
-                        source: effectiveSession?.source
+                        workingVerb: currentSpinnerVerb
                     )
                 }
 
@@ -195,7 +202,7 @@ struct ExpandedPanelView: View {
                 VStack(alignment: .leading, spacing: 0) {
                     HStack {
                         if let session = effectiveSession {
-                            Text("\(session.projectName) #\(session.sessionNumber)")
+                            Text(sessionStore.displaySessionLabel(for: session))
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(TerminalColors.secondaryText)
                         }

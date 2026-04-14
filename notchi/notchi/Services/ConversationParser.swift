@@ -31,6 +31,8 @@ struct ParseResult {
 
 actor ConversationParser {
     static let shared = ConversationParser()
+    static let defaultProjectsRootPath = "\(NSHomeDirectory())/.claude/projects"
+    static var projectsRootPath = defaultProjectsRootPath
 
     private var lastFileOffset: [String: UInt64] = [:]
     private var seenMessageIds: [String: Set<String>] = [:]
@@ -53,6 +55,19 @@ actor ConversationParser {
         return formatter
     }()
 
+    @MainActor
+    static func configureProjectsRootPath(using claudeConfig: ClaudeConfigDirectoryResolution) {
+        projectsRootPath = claudeConfig.projectsDirectoryURL.path
+    }
+
+    static func resolvedTranscriptPath(sessionId: String, cwd: String, transcriptPath: String?) -> String {
+        if let trimmedPath = transcriptPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !trimmedPath.isEmpty {
+            return trimmedPath
+        }
+        return derivedTranscriptPath(sessionId: sessionId, cwd: cwd)
+    }
+
     /// Parse only NEW assistant text messages since last call.
     func parseIncremental(sessionId: String, cwd: String, source: AIToolSource, transcriptPath: String?) -> ParseResult {
         guard let sessionFile = resolveSessionFilePath(
@@ -72,6 +87,16 @@ actor ConversationParser {
         case .gemini:
             return parseGeminiSnapshot(sessionId: sessionId, filePath: sessionFile)
         }
+    }
+
+    /// Compatibility overload for the upstream Claude-only parser tests.
+    func parseIncremental(sessionId: String, transcriptPath: String) -> ParseResult {
+        parseIncremental(
+            sessionId: sessionId,
+            cwd: "",
+            source: .claude,
+            transcriptPath: transcriptPath
+        )
     }
 
     /// Reset parsing state for a session.
@@ -139,9 +164,17 @@ actor ConversationParser {
         }
     }
 
+    func markCurrentPosition(sessionId: String, transcriptPath: String) {
+        markCurrentPosition(
+            sessionId: sessionId,
+            cwd: "",
+            source: .claude,
+            transcriptPath: transcriptPath
+        )
+    }
+
     static func sessionFilePath(sessionId: String, cwd: String) -> String {
-        let projectDir = cwd.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
-        return "\(NSHomeDirectory())/.claude/projects/\(projectDir)/\(sessionId).jsonl"
+        derivedTranscriptPath(sessionId: sessionId, cwd: cwd)
     }
 
     private func parseClaudeIncremental(sessionId: String, filePath: String) -> ParseResult {
@@ -173,6 +206,7 @@ actor ConversationParser {
             if seen.contains(uuid) { continue }
             if json["isMeta"] as? Bool == true { continue }
             guard let messageDict = json["message"] as? [String: Any] else { continue }
+            if (messageDict["model"] as? String) == "<synthetic>" { continue }
 
             let timestamp = parseTimestamp(json["timestamp"])
 
@@ -511,7 +545,11 @@ actor ConversationParser {
         let discoveredPath: String?
         switch source {
         case .claude:
-            discoveredPath = Self.sessionFilePath(sessionId: sessionId, cwd: cwd)
+            discoveredPath = Self.resolvedTranscriptPath(
+                sessionId: sessionId,
+                cwd: cwd,
+                transcriptPath: transcriptPath
+            )
         case .codex:
             discoveredPath = findCodexSessionFile(sessionId: sessionId)
         case .gemini:
@@ -690,6 +728,11 @@ actor ConversationParser {
         default:
             return functionName
         }
+    }
+
+    private static func derivedTranscriptPath(sessionId: String, cwd: String) -> String {
+        let projectDir = cwd.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ".", with: "-")
+        return "\(projectsRootPath)/\(projectDir)/\(sessionId).jsonl"
     }
 
     private func codexToolDescription(functionName: String?, arguments: [String: Any]?) -> String? {
